@@ -56,7 +56,8 @@ DEFAULTS = {
         "target_minutes": 10,
         "chars_per_second": 8.5,         # Korean narration speed (chars incl. spaces / s); auto-calibrated per voice after each video
         "max_ai_video_clips": 6,         # Gemini Omni clips per video (most expensive part)
-        "ai_image_ratio": 0.45,          # share of non-video scenes that use AI images (rest = stock)
+        "ai_image_ratio": 0.45,          # (old plans only) share of non-video scenes that use AI images
+        "image_source": "ai",            # ai: Gemini makes images (paid) / manual: you make them (e.g. ChatGPT) from the prompt list
         "burn_subtitles": True,
         "upload_srt_caption": False,
         "auto_upload_private": True,

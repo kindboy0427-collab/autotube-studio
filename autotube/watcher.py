@@ -50,6 +50,10 @@ WATCH_PROMPT = """당신은 유튜브 롱폼 성과 분석가다. 이 영상을 
  "pacing": {{"avg_shot_seconds": 숫자, "narration_speed": {pace}, "energy": {pace}}},
  "narration_style": {narration} 중 1~2개 배열,
  "visual_style": {visual} 중 사용된 것들의 배열,
+ "visual_mix": {{"real_footage": 0, "archival": 0, "interview_clip": 0, "motion_graphics": 0, "stock": 0, "ai_generated": 0, "talking_head": 0, "photo": 0}}
+   (화면에 나온 시간 비율 %, 합 100. real_footage=실제 촬영 현장·공정·실험, archival=옛 자료·뉴스 화면, interview_clip=인물 발언 영상,
+    motion_graphics=도식·애니메이션·자막 그래픽, photo=정지 사진에 줌·패닝),
+ "shot_ideas": ["이 영상이 쓴 화면 연출 방식 3~6개를 일반화해서 (예: '공정 순서를 실사 클로즈업으로 이어붙임', '인물 사진 + 발언 자막 카드')"],
  "emotional_arc": {emotion} 중 등장 순서대로 배열,
  "title_pattern": {titlep} 중 해당하는 것들의 배열,
  "cta_timing": "none|early|middle|end",

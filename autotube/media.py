@@ -110,6 +110,24 @@ def overlay_text(clip, text, out):
     return out
 
 
+def quote_card(clip, text, by, out):
+    """Lower-third quote card: “발언” + — 이름, 연도 (for interview-style citations)."""
+    _, h = _wh()
+    t1 = Path(out).with_suffix(".q1.txt")
+    t2 = Path(out).with_suffix(".q2.txt")
+    t1.write_text("“" + text.strip() + "”", encoding="utf-8")
+    t2.write_text(by.strip(), encoding="utf-8")
+    font = config.font_path()
+    ff = f":fontfile='{_ff_path(font)}'" if font else ""
+    vf = (f"drawbox=x=0:y=ih*0.70:w=iw:h=ih*0.22:color=black@0.55:t=fill,"
+          f"drawtext=textfile='{_ff_path(t1)}':expansion=none{ff}:fontsize={int(h * 0.045)}:fontcolor=white:"
+          f"x=(w-text_w)/2:y=h*0.735,"
+          f"drawtext=textfile='{_ff_path(t2)}':expansion=none{ff}:fontsize={int(h * 0.032)}:fontcolor=0xFFD54F:"
+          f"x=(w-text_w)/2:y=h*0.835")
+    run(["-i", clip, "-vf", vf, *VENC, "-an", out])
+    return out
+
+
 def pad_audio(src, seconds, out):
     run(["-i", src, "-af", f"apad=whole_dur={seconds:.3f},atrim=0:{seconds:.3f}", "-ar", "44100", "-ac", "2", out])
     return out

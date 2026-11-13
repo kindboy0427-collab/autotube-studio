@@ -46,6 +46,11 @@
       <textarea id="topic" rows="3" placeholder="예) 조선시대 왕들이 실제로 먹던 음식 이야기 / 초보자를 위한 ETF 투자 완전정복"></textarea>
       <label>추가 지시 (선택)</label>
       <textarea id="instr" rows="3" placeholder="예) 차분한 다큐 톤, 20~40대 대상, 마지막에 시청자 경험 질문"></textarea>
+      <label>이미지</label>
+      <select id="makeImg">
+        <option value="manual">내가 직접 만들어 넣기 (ChatGPT 등 — 프롬프트를 한 번에 드림, 이미지 비용 0원)</option>
+        <option value="ai">AI가 자동 생성 (Gemini, 장당 약 $0.04)</option>
+      </select>
       <label>대본 틀 (좋아하는 레퍼런스 영상 구조)</label>
       <select id="makeFormat"></select>
       <div class="row">

@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const STATUS = {queued:'대기', running:'제작 중', ready:'완성(미업로드)', uploaded_private:'비공개 업로드됨', published:'공개됨', failed:'실패'};
+const STATUS = {waiting_images:'이미지 기다리는 중', queued:'대기', running:'제작 중', ready:'완성(미업로드)', uploaded_private:'비공개 업로드됨', published:'공개됨', failed:'실패'};
 const STEP = {plan:'대본 기획', voice:'내레이션', visuals:'영상·이미지', music:'배경음악', render:'렌더링', thumbnail:'썸네일', upload:'업로드', done:'완료'};
 const FEAT = {hook:'도입', retention:'이탈방지', engagement:'참여유도', narration:'내레이션', visual:'화면', emotion:'감정', opens_with:'첫 감정', title:'제목', pace:'말속도', shots:'컷 길이', cta:'구독요청', format:'형식'};
 let S = {}, openId = null;
@@ -40,6 +40,7 @@ async function loadStatus() {
   checkVersion();
   S = await api('/api/status');
   const L = S.learning;
+  if (!window._imgInit && S.settings) { window._imgInit = 1; $('makeImg').value = (S.settings.production || {}).image_source === 'ai' ? 'ai' : 'manual' }
   if (!$('makeFormat').options.length) $('makeFormat').innerHTML = '<option value="">자동 (주제에 맞게 AI가 선택)</option>' + Object.entries(S.formats || {}).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join('');
   $('kWatched').textContent = L.watched.toLocaleString();
   $('kQueue').textContent = `대기열 ${L.queued} · 오늘 시청 ${L.watch_hours_today}시간`;
@@ -73,7 +74,7 @@ $('btnMake').onclick = async () => {
   if (topic.length < 2) return;
   $('btnMake').disabled = true;
   try {
-    const r = await post('/api/productions', {topic, instructions: $('instr').value, minutes: +$('minutes').value || 10, channel_id: $('makeChannel').value || null, script_format: $('makeFormat').value || null});
+    const r = await post('/api/productions', {topic, instructions: $('instr').value, minutes: +$('minutes').value || 10, channel_id: $('makeChannel').value || null, script_format: $('makeFormat').value || null, image_source: $('makeImg').value});
     $('makeMsg').innerHTML = `<div class="msg">제작을 시작했습니다. '제작 목록'에서 진행 상황을 볼 수 있습니다. (${esc(r.id)})</div>`;
     $('topic').value = ''; $('instr').value = '';
   } catch (e) { $('makeMsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>` }
@@ -111,6 +112,7 @@ async function showDetail(id, quiet) {
       ${(plan.scenes || []).length ? '<button id="dRevoice">내레이션만 다시 만들기</button>' : ''}
       <button id="dReplan">대본부터 새로 만들기</button>
     </div>
+    ${p.status === 'waiting_images' ? '<div id="imgPanel" class="panel"></div>' : ''}
     ${(plan.titles || []).length ? `<h4>제목 후보</h4><div>${plan.titles.map(t => `<div>· ${esc(t)}</div>`).join('')}</div>` : ''}
     ${(plan.features_used || []).length ? `<h4>반영한 학습 패턴</h4><div>${plan.features_used.map(f => `<span class="feat">${esc(featLabel(f))}</span>`).join('')}</div>` : ''}
     ${p.fact_check && p.fact_check !== '(없음)' ? `<h4>⚠ 공개 전 사실 확인할 것</h4><div class="pre">${esc(p.fact_check)}</div>` : ''}
@@ -127,7 +129,37 @@ async function showDetail(id, quiet) {
   bind('fbSend', async () => { const t = $('fbText').value.trim(); if (t) { const r = await post(`/api/channels/${p.channel_id}/feedback`, {feedback: t}); alert('채널 규칙이 갱신되었습니다:\n' + r.style_guide) } });
   bind('dRevoice', () => confirm('대본·이미지·영상은 그대로 두고 내레이션만 다시 만든 뒤 다시 렌더링할까요? (몇 십 원 수준)') && post(`/api/productions/${id}/revoice`));
   bind('dReplan', () => confirm('대본과 작업 파일을 지우고 새로 만들까요?') && post(`/api/productions/${id}/replan`));
+  if (p.status === 'waiting_images') imagePanel(id);
   if (!quiet) d.scrollIntoView({behavior: 'smooth'});
+}
+
+async function imagePanel(id) {
+  const box = $('imgPanel'); if (!box) return;
+  const d = await api(`/api/productions/${id}/images`);
+  const empty = d.slots.filter(s => !s.file).length;
+  box.innerHTML = `<h3>이미지 ${d.slots.length}장 넣기 <small class="hint">(남은 칸 ${empty})</small></h3>
+    <p class="hint">① [프롬프트 전체 복사] → ChatGPT에 붙여넣고 번호 순서대로 만들기 → ② 받은 이미지들을 아래 [여러 장 한 번에 넣기]로 선택
+    (다운로드한 순서대로 빈 칸에 채워짐) → ③ 칸을 눌러 한 장씩 바꿀 수도 있음 → ④ [이미지 넣었어요 → 계속]. 빈 칸은 무료 실제 자료·스톡 화면으로 채웁니다.</p>
+    <div class="row"><button id="ipCopy" class="primary">프롬프트 전체 복사</button>
+      <label class="inline">여러 장 한 번에 넣기 <input type="file" id="ipBulk" accept="image/*" multiple></label>
+      <button id="ipGo" class="primary">이미지 넣었어요 → 계속</button></div>
+    <div class="slots">${d.slots.map(s => `<div class="slot" title="${esc(s.prompt)}"><b>${String(s.n).padStart(2, '0')}</b> <small>${esc(s.what || '')}</small><br>
+      ${s.file ? `<img src="/media/${esc(id)}/my/${esc(s.file)}?t=${Date.now()}">` : '<div class="noimg">비어 있음</div>'}
+      <label class="inline"><input type="file" accept="image/*" data-slot="${s.n}"> 바꾸기</label></div>`).join('')}</div>`;
+  $('ipCopy').onclick = async () => { await navigator.clipboard.writeText(d.prompts); $('ipCopy').textContent = '복사됨 ✓ ChatGPT에 붙여넣으세요' };
+  const send = async items => { await post(`/api/productions/${id}/images`, {items}); imagePanel(id) };
+  const toItem = async (f, n) => ({n, b64: await readB64(f), ext: (f.name.split('.').pop() || 'png')});
+  $('ipBulk').onchange = async e => {
+    const files = [...e.target.files].sort((a, b) => a.lastModified - b.lastModified || a.name.localeCompare(b.name, undefined, {numeric: true}));
+    const named = files.filter(f => /^\d{1,3}\./.test(f.name));
+    let items = [];
+    if (named.length === files.length) items = await Promise.all(files.map(f => toItem(f, parseInt(f.name))));
+    else { const free = d.slots.filter(s => !s.file).map(s => s.n); items = await Promise.all(files.slice(0, free.length).map((f, i) => toItem(f, free[i]))) }
+    for (let i = 0; i < items.length; i += 5) await post(`/api/productions/${id}/images`, {items: items.slice(i, i + 5)});
+    imagePanel(id);
+  };
+  box.querySelectorAll('[data-slot]').forEach(inp => inp.onchange = async e => { if (e.target.files[0]) await send([await toItem(e.target.files[0], +inp.dataset.slot)]) });
+  $('ipGo').onclick = async () => { if (empty && !confirm(`빈 칸 ${empty}개는 무료 실제 자료·스톡 화면으로 채웁니다. 계속할까요?`)) return; await post(`/api/productions/${id}/images/continue`); loadList() };
 }
 
 const featLabel = f => { const [c, v] = f.split(':'); return (FEAT[c] || c) + ': ' + v };

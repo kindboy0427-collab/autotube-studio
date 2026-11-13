@@ -254,3 +254,28 @@ def record_own_performance(stats_fn=None, analytics_fn=None):
         n += 1
     update_patterns()
     return n
+
+
+
+MIX_KEYS = ("real_footage", "archival", "interview_clip", "motion_graphics", "stock", "ai_generated", "talking_head", "photo")
+
+
+def visual_mix_target(min_pct=0.7, min_n=3):
+    """Average screen-time mix of the best-performing analysed videos (watched with picture), + common shot ideas."""
+    rows = db.rows("""SELECT a.raw, a.perf_percentile p, COALESCE(v.favorite,0) fav FROM analyses a JOIN videos v ON v.id=a.video_id
+        WHERE (a.perf_percentile >= ? OR v.favorite=1) AND a.model != 'captions+llm'""", (min_pct,))
+    mixes, ideas = [], []
+    for r in rows:
+        a = json.loads(r["raw"])
+        m = a.get("visual_mix")
+        if isinstance(m, dict):
+            vals = {k: float(m.get(k) or 0) for k in MIX_KEYS}
+            tot = sum(vals.values())
+            if tot > 0:
+                w = 3 if r["fav"] else 1
+                mixes += [{k: v * 100 / tot for k, v in vals.items()}] * w
+        ideas += [str(x)[:80] for x in (a.get("shot_ideas") or [])[:6]]
+    if len(mixes) < min_n:
+        return None
+    avg = {k: round(sum(m[k] for m in mixes) / len(mixes)) for k in MIX_KEYS}
+    return {"mix": avg, "n": len(mixes), "shot_ideas": ideas[:15]}

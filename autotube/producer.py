@@ -17,7 +17,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from . import align, budget, channels, config, db, gemini, media, music, planner, stock, tts, voicecheck
+from . import align, archive, budget, channels, config, db, gemini, media, music, planner, stock, tts, voicecheck
 
 STEPS = ["plan", "voice", "visuals", "music", "render", "thumbnail", "upload", "done"]
 PROGRESS = {"plan": 5, "voice": 20, "visuals": 40, "music": 75, "render": 80, "thumbnail": 92, "upload": 95, "done": 100}
@@ -31,6 +31,9 @@ class Providers:
     ai_image = staticmethod(gemini.generate_image)
     stock_video = staticmethod(stock.find_video)
     stock_photo = staticmethod(stock.find_photo)
+    archive_video = staticmethod(archive.find_video)
+    archive_photo = staticmethod(archive.find_photo)
+    person_photo = staticmethod(archive.find_person)
     music = staticmethod(music.get_track)
 
     @staticmethod
@@ -66,7 +69,20 @@ def _log(pid, msg):
 
 
 def assign_visual_types(scenes, max_ai_video, ai_image_ratio):
-    """Code (not the LLM) decides the expensive mix: AI video for the most important scenes."""
+    """Code (not the LLM) decides the expensive mix.
+    Scenes with visual.source (v1.8 plans): real -> archive/stock footage, person -> portrait + quote,
+    diagram -> simple explainer image, illustration -> AI image (AI video for the most important ones).
+    Older plans without source keep the original rule."""
+    if any((s.get("visual") or {}).get("source") for s in scenes):
+        illu = [i for i, s in enumerate(scenes) if s["visual"].get("source", "illustration") == "illustration"]
+        vids = sorted(illu, key=lambda i: (-scenes[i].get("importance", 1), i))
+        vids = {i for i in vids if scenes[i].get("importance", 1) >= 2}
+        vids = set(sorted(vids, key=lambda i: (-scenes[i].get("importance", 1), i))[:max_ai_video])
+        for i, s in enumerate(scenes):
+            src = s["visual"].get("source", "illustration")
+            s["visual"]["type"] = ("ai_video" if i in vids else "ai_image") if src == "illustration" else \
+                {"real": "real", "person": "person", "diagram": "diagram"}[src]
+        return scenes
     order = sorted(range(len(scenes)), key=lambda i: (-scenes[i].get("importance", 1), i))
     video_idx = set()
     chapters_seen = set()
@@ -88,17 +104,77 @@ def assign_visual_types(scenes, max_ai_video, ai_image_ratio):
     return scenes
 
 
-def _visual(pid, s, i, d, folder, used, providers, credits):
+IMAGE_SLOT_TYPES = ("ai_image", "ai_video", "diagram")
+CHAINS = {
+    "ai_video": ["ai_video", "my_image", "ai_image", "stock_video", "stock_photo"],
+    "ai_image": ["my_image", "ai_image", "stock_video", "stock_photo"],
+    "diagram": ["my_image", "ai_image", "stock_photo"],
+    "real": ["archive_video", "stock_video", "archive_photo", "stock_photo", "ai_image"],
+    "person": ["person_photo", "archive_photo", "stock_photo", "ai_image"],
+    "stock_video": ["stock_video", "stock_photo", "ai_image"],
+}
+
+
+def my_images_dir(out):
+    p = Path(out) / "my_images"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def my_image(out, n):
+    """User-supplied image for slot n (scene number, 0 = thumbnail)."""
+    for f in sorted(my_images_dir(out).glob(f"{n:02d}.*")):
+        if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+            return f
+    return None
+
+
+def image_slots(plan):
+    slots = [{"n": 0, "what": "썸네일 배경", "prompt": plan["thumbnail"].get("image_prompt", "")}]
+    for i, s in enumerate(plan["scenes"]):
+        if s["visual"].get("type") in IMAGE_SLOT_TYPES:
+            style = "clean minimal infographic illustration, flat colors, no text" if s["visual"]["type"] == "diagram" else \
+                "cinematic, photorealistic, dramatic lighting, no text, no watermark"
+            slots.append({"n": i + 1, "what": s.get("chapter", ""), "narration": s["narration"],
+                          "prompt": f"{s['visual'].get('prompt', '')}, {style}"})
+    return slots
+
+
+def prompts_text(plan):
+    lines = ["아래 이미지들을 하나씩 만들어 주세요. 모두 16:9 가로, 글자·로고·워터마크 없이.",
+             "각 이미지는 번호 순서대로 만들고, 저장할 때 번호를 파일 이름으로 쓰면 편합니다 (예: 01.png).", ""]
+    for sl in image_slots(plan):
+        lines.append(f"[{sl['n']:02d}] {sl['what']}")
+        lines.append(sl["prompt"])
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _space(channel, plan):
+    words = " ".join((channel or {}).get("niches", []) + [plan.get("title", "")]).lower()
+    return any(w in words for w in ("우주", "천문", "space", "nasa", "로켓", "행성", "블랙홀", "은하"))
+
+
+def _visual(pid, s, i, d, folder, used, providers, credits, manual=False, out=None, space=False):
     """Produce the raw visual for scene i with a fallback chain; returns (kind, path)."""
     kind = s["visual"]["type"]
     prompt = s["visual"].get("prompt", "")
     q = s["visual"].get("stock_query") or prompt[:40]
-    chain = {"ai_video": ["ai_video", "ai_image", "stock_video", "stock_photo"],
-             "ai_image": ["ai_image", "stock_video", "stock_photo"],
-             "stock_video": ["stock_video", "stock_photo", "ai_image"]}[kind]
+    chain = list(CHAINS.get(kind, CHAINS["ai_image"]))
+    if manual:  # images come from the owner (ChatGPT etc.) -> never pay for AI images/videos
+        chain = [k for k in chain if k not in ("ai_image", "ai_video")] or ["stock_video", "stock_photo"]
     errors = []
     for k in chain:
         try:
+            if k == "my_image":
+                f = my_image(out, i + 1) if out else None
+                if not f:
+                    continue
+                p = folder / f"s{i:03d}_aiimage.png"
+                if not p.exists():
+                    from PIL import Image
+                    Image.open(f).convert("RGB").save(p)
+                return "ai_image", str(p)
             if k == "ai_video":
                 p = str(folder / f"s{i:03d}_aivideo.mp4")
                 if not Path(p).exists():
@@ -107,20 +183,30 @@ def _visual(pid, s, i, d, folder, used, providers, credits):
             if k == "ai_image":
                 p = str(folder / f"s{i:03d}_aiimage.png")
                 if not Path(p).exists():
-                    providers.ai_image(prompt + ", cinematic lighting, highly detailed, no text, no watermark", p, production_id=pid)
+                    style = "clean minimal infographic illustration, flat colors, no text" if kind == "diagram" else \
+                        "cinematic lighting, highly detailed, no text, no watermark"
+                    providers.ai_image(prompt + ", " + style, p, production_id=pid)
                 return k, p
-            if k == "stock_video":
-                p = str(folder / f"s{i:03d}_stock.mp4")
+            if k in ("archive_video", "stock_video"):
+                p = str(folder / f"s{i:03d}_{'archive' if k == 'archive_video' else 'stock'}.mp4")
                 if not Path(p).exists():
-                    _, meta = providers.stock_video(q, d, used, p)
+                    if k == "archive_video":
+                        _, meta = providers.archive_video(q, used, p, space=space)
+                    else:
+                        _, meta = providers.stock_video(q, d, used, p)
                     credits.append(meta)
-                return k, p
-            if k == "stock_photo":
-                p = str(folder / f"s{i:03d}_photo.jpg")
+                return "stock_video", p
+            if k in ("archive_photo", "stock_photo", "person_photo"):
+                p = str(folder / f"s{i:03d}_{k}.jpg")
                 if not Path(p).exists():
-                    _, meta = providers.stock_photo(q, used, p)
+                    if k == "person_photo":
+                        _, meta = providers.person_photo(s["visual"].get("person", ""), used, p)
+                    elif k == "archive_photo":
+                        _, meta = providers.archive_photo(q, used, p, space=space)
+                    else:
+                        _, meta = providers.stock_photo(q, used, p)
                     credits.append(meta)
-                return k, p
+                return "stock_photo", p
         except budget.BudgetExceeded as ex:
             errors.append(f"{k}: {ex}")
             continue  # cheaper fallback next
@@ -194,9 +280,19 @@ def description_credits(plan, credits, work, voice_used, ai_kinds):
         ai.append("나레이션은 AI 음성입니다 (" + ", ".join(eng) + ")")
     parts.append("※ " + ". ".join(ai + ["대본 작성에 AI 도구를 활용했습니다"]) + ".")
     media_c = []
-    if credits:
-        authors = sorted({c.get("author") for c in credits if c.get("author")})[:15]
+    pex = [c for c in credits if (c.get("source") or "pexels") == "pexels"]
+    arc = [c for c in credits if c.get("source") in ("Wikimedia Commons", "NASA")]
+    if pex:
+        authors = sorted({c.get("author") for c in pex if c.get("author")})[:15]
         media_c.append("자료 화면: Pexels" + (" (" + ", ".join(authors) + ")" if authors else ""))
+    if arc:
+        seen, lines = set(), []
+        for c in arc:
+            if c.get("page") in seen:
+                continue
+            seen.add(c.get("page"))
+            lines.append(f"- {c.get('author') or 'Unknown'} / {c.get('license')} / {c.get('source')} {c.get('page') or ''}".strip())
+        media_c.append("사진·영상 출처 (원본 자르기·확대·색 보정 적용):\n" + "\n".join(lines[:40]))
     mo = Path(work) / "music_origin.txt"
     if mo.exists():
         origin, _, path = mo.read_text(encoding="utf-8").partition("\t")
@@ -303,13 +399,23 @@ def run(pid, providers=Providers):
 
         # 3 visuals ---------------------------------------------------------
         _set(pid, step="visuals", progress=PROGRESS["visuals"])
+        manual = (db.kv_get("imgsrc:" + pid) or ps.get("image_source", "ai")) == "manual"
+        if manual:
+            (out / "image_prompts.txt").write_text(prompts_text(plan), encoding="utf-8")
+            missing = [sl["n"] for sl in image_slots(plan) if not my_image(out, sl["n"])]
+            if missing and not db.kv_get("imgready:" + pid):
+                _log(pid, f"이미지 {len(image_slots(plan))}장 프롬프트 준비 완료 → ChatGPT 등으로 만들어 넣어주세요 (비어 있는 번호: "
+                          f"{', '.join(f'{n:02d}' for n in missing[:30])}). 넣은 뒤 [이미지 넣었어요 → 계속]")
+                _set(pid, status="waiting_images")
+                return "waiting_images"
+        space = _space(channel, plan)
         used, credits, clips, kinds = set(), [], [], {}
         for i, sc in enumerate(scenes):
             d = sc["_voice"]["duration"] + 0.35 + (float(ps.get("emphasis_pause_seconds", 1.2)) if sc.get("pause_after") else 0)
             sc["_dur"] = d
             clip = work / f"s{i:03d}_clip.mp4"
             if not clip.exists():
-                kind, raw = _visual(pid, sc, i, d, work, used, providers, credits)
+                kind, raw = _visual(pid, sc, i, d, work, used, providers, credits, manual=manual, out=out, space=space)
                 tmp = work / f"s{i:03d}_base.mp4"
                 if kind in ("ai_video", "stock_video"):
                     media.video_clip(raw, d, str(tmp))
@@ -318,9 +424,14 @@ def run(pid, providers=Providers):
                 else:
                     media.color_clip(d, str(tmp), text=sc.get("on_screen_text") or plan["title"])
                 if sc.get("on_screen_text") and kind != "card":
-                    media.overlay_text(str(tmp), sc["on_screen_text"], str(clip))
-                else:
-                    tmp.replace(clip)
+                    media.overlay_text(str(tmp), sc["on_screen_text"], str(tmp.with_name(tmp.stem + "_t.mp4")))
+                    tmp.with_name(tmp.stem + "_t.mp4").replace(tmp)
+                if sc.get("quote") and kind != "card":
+                    q = sc["quote"]
+                    media.quote_card(str(tmp), q["text"], f"— {q['by']}" + (f", {q['when']}" if q.get("when") else ""),
+                                     str(tmp.with_name(tmp.stem + "_q.mp4")))
+                    tmp.with_name(tmp.stem + "_q.mp4").replace(tmp)
+                tmp.replace(clip)
                 kinds[kind] = kinds.get(kind, 0) + 1
             clips.append(str(clip))
             _set(pid, progress=PROGRESS["visuals"] + 35 * (i + 1) / len(scenes))
@@ -374,7 +485,14 @@ def run(pid, providers=Providers):
         # 6 thumbnail -------------------------------------------------------
         _set(pid, step="thumbnail", progress=PROGRESS["thumbnail"])
         bg = work / "thumb_bg.png"
-        if not bg.exists():
+        mine = my_image(out, 0)
+        if mine and not bg.exists():
+            from PIL import Image
+            Image.open(mine).convert("RGB").save(bg)
+        if not bg.exists() and manual:
+            firsts = sorted(work.glob("s*_aiimage.png")) or sorted(work.glob("s*_photo*.jpg"))
+            bg = firsts[0] if firsts else None
+        elif not bg.exists():
             try:
                 providers.ai_image(plan["thumbnail"].get("image_prompt", "") + ", dramatic, high contrast, no text",
                                    str(bg), production_id=pid)

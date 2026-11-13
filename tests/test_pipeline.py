@@ -1,6 +1,7 @@
 """End-to-end: fake AI providers, REAL ffmpeg rendering -> playable MP4 + SRT + thumbnail."""
 import json
 import subprocess
+from unittest.mock import patch
 from pathlib import Path
 
 from PIL import Image
@@ -184,3 +185,82 @@ class DrawtextSpecialChars(TempHome):
         out = media.overlay_text(str(base), "순도 99.999999999% : 'Si' {x}", str(Path(self.tmp) / "o.mp4"))
         self.assertTrue(Path(out).exists())
         media.color_clip(1, str(Path(self.tmp) / "c.mp4"), text="100% 규소")
+
+
+class RealFootageAndManualImages(TempHome):
+    def setUp(self):
+        super().setUp()
+        config.save_settings({"production": {"resolution": "640x360", "fps": 24, "max_ai_video_clips": 1, "voice_check": False}})
+
+    def _plan_with_sources(self):
+        class P(FakeProviders):
+            @staticmethod
+            def plan(topic, instructions, minutes, production_id=None, channel=None, script_format=None):
+                p = FakeProviders.plan(topic, instructions, minutes)
+                srcs = ["illustration", "real", "person", "diagram", "real", "illustration"]
+                for s, src in zip(p["scenes"], srcs):
+                    s["visual"]["source"] = src
+                p["scenes"][2]["visual"]["person"] = "Gordon Moore"
+                p["scenes"][2]["quote"] = {"text": "칩의 집적도는 2년마다 두 배", "by": "고든 무어", "when": "1975"}
+                return p
+
+            @staticmethod
+            def archive_video(q, used, out, space=False):
+                ff(["-f", "lavfi", "-i", "testsrc=size=640x360:rate=24:duration=1", "-pix_fmt", "yuv420p", out])
+                return out, {"source": "Wikimedia Commons", "author": "Fab Lab", "license": "CC BY-SA 4.0", "page": "https://c/1"}
+
+            @staticmethod
+            def person_photo(name, used, out):
+                Image.new("RGB", (800, 600), (90, 90, 90)).save(out)
+                return out, {"source": "Wikimedia Commons", "author": "Intel", "license": "CC BY 2.0", "page": "https://c/2"}
+        return P
+
+    def test_sources_quote_and_credits(self):
+        P = self._plan_with_sources()
+        pid = producer.create("반도체", "", 1)
+        db.kv_set("imgsrc:" + pid, "ai")
+        self.assertEqual(producer.run(pid, P), "ready")
+        plan = json.loads(db.one("SELECT plan FROM productions WHERE id=?", (pid,))["plan"])
+        types = [s["visual"]["type"] for s in plan["scenes"]]
+        self.assertEqual(types, ["ai_video", "real", "person", "diagram", "real", "ai_image"])
+        desc = (config.OUTPUT / pid / "description.txt").read_text(encoding="utf-8")
+        self.assertIn("CC BY-SA 4.0", desc)
+        self.assertIn("Intel / CC BY 2.0", desc)
+
+    def test_manual_images_wait_then_use_mine_without_paid_ai(self):
+        P = self._plan_with_sources()
+        FakeProviders.calls["ai_image"] = FakeProviders.calls["ai_video"] = 0
+        pid = producer.create("반도체", "", 1)
+        db.kv_set("imgsrc:" + pid, "manual")
+        self.assertEqual(producer.run(pid, P), "waiting_images")
+        out = config.OUTPUT / pid
+        txt = (out / "image_prompts.txt").read_text(encoding="utf-8")
+        self.assertIn("[00] 썸네일 배경", txt)
+        self.assertIn("[01]", txt)
+        self.assertIn("[04]", txt)  # diagram slot
+        d = producer.my_images_dir(out)
+        Image.new("RGB", (1280, 720), (200, 30, 30)).save(d / "01.png")
+        Image.new("RGB", (1280, 720), (30, 200, 30)).save(d / "00.png")
+        db.kv_set("imgready:" + pid, True)
+        self.assertEqual(producer.run(pid, P), "ready")
+        self.assertEqual(FakeProviders.calls["ai_image"], 0)
+        self.assertEqual(FakeProviders.calls["ai_video"], 0)
+        self.assertTrue((out / "work" / "s000_aiimage.png").exists())
+
+
+class ArchiveParsing(TempHome):
+    def test_commons_keeps_only_free_licenses(self):
+        from autotube import archive
+        res = {"query": {"pages": {
+            "1": {"title": "File:Wafer.jpg", "imageinfo": [{"url": "u1", "thumburl": "t1", "descriptionurl": "p1", "width": 3000,
+                  "height": 2000, "mime": "image/jpeg", "extmetadata": {"LicenseShortName": {"value": "CC BY-SA 4.0"},
+                                                                         "Artist": {"value": "<a>Jane</a>"}}}]},
+            "2": {"title": "File:X.jpg", "imageinfo": [{"url": "u2", "descriptionurl": "p2", "width": 3000, "height": 2000,
+                  "mime": "image/jpeg", "extmetadata": {"LicenseShortName": {"value": "CC BY-NC 2.0"}}}]},
+            "3": {"title": "File:Y.jpg", "imageinfo": [{"url": "u3", "descriptionurl": "p3", "width": 300, "height": 200,
+                  "mime": "image/jpeg", "extmetadata": {"LicenseShortName": {"value": "Public domain"}}}]}}}}
+        with patch("autotube.http.get_json", return_value=res):
+            r = archive.commons_search("wafer")
+        self.assertEqual([x["page"] for x in r], ["p1"])
+        self.assertEqual(r[0]["author"], "Jane")
+        self.assertEqual(r[0]["url"], "t1")

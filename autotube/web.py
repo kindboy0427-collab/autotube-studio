@@ -163,12 +163,79 @@ def status():
             "formats": {k: v["name"] for k, v in planner.FORMATS.items()}}
 
 
+class ImageUpload(BaseModel):
+    items: list[dict] = Field(min_length=1, max_length=120)
+
+
+@app.get("/api/productions/{pid}/images")
+def production_images(pid: str):
+    r = db.one("SELECT plan, output_dir, status FROM productions WHERE id=?", (pid,))
+    if not r or not r["plan"]:
+        raise HTTPException(404)
+    plan = json.loads(r["plan"])
+    out = Path(r["output_dir"] or (config.OUTPUT / pid))
+    slots = producer.image_slots(plan)
+    for sl in slots:
+        f = producer.my_image(out, sl["n"])
+        sl["file"] = f.name if f else None
+    return {"slots": slots, "prompts": producer.prompts_text(plan), "status": r["status"]}
+
+
+@app.post("/api/productions/{pid}/images")
+def upload_images(pid: str, body: ImageUpload):
+    import base64
+    r = db.one("SELECT output_dir FROM productions WHERE id=?", (pid,))
+    if not r:
+        raise HTTPException(404)
+    d = producer.my_images_dir(Path(r["output_dir"] or (config.OUTPUT / pid)))
+    saved = []
+    for it in body.items:
+        n = int(it.get("n", -1))
+        if not 0 <= n <= 999:
+            continue
+        ext = "." + re.sub(r"[^a-z]", "", str(it.get("ext", "png")).lower())[:4]
+        if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+            ext = ".png"
+        raw = base64.b64decode(str(it.get("b64", "")).split(",", 1)[-1])
+        if len(raw) > 25 * 1024 * 1024:
+            continue
+        for old in d.glob(f"{n:02d}.*"):
+            old.unlink(missing_ok=True)
+        (d / f"{n:02d}{ext}").write_bytes(raw)
+        work = Path(r["output_dir"] or "", "work")
+        for f in list(work.glob(f"s{n - 1:03d}_aiimage.png")) + list(work.glob(f"s{n - 1:03d}_clip.mp4")) + \
+                (list(work.glob("thumb_bg.png")) if n == 0 else []):
+            f.unlink(missing_ok=True)  # replaced image -> rebuild that scene
+        saved.append(n)
+    return {"saved": saved}
+
+
+@app.post("/api/productions/{pid}/images/continue")
+def images_continue(pid: str):
+    if not db.one("SELECT id FROM productions WHERE id=?", (pid,)):
+        raise HTTPException(404)
+    db.kv_set("imgready:" + pid, True)
+    WORKER.submit(pid)
+    return {"ok": True}
+
+
+@app.get("/media/{pid}/my/{name}")
+def my_image_file(pid: str, name: str):
+    if not re.fullmatch(r"[\w-]+", pid) or not re.fullmatch(r"\d{2}\.(png|jpg|jpeg|webp)", name):
+        raise HTTPException(404)
+    f = (config.OUTPUT / pid / "my_images" / name).resolve()
+    if not f.is_file():
+        raise HTTPException(404)
+    return FileResponse(f)
+
+
 class NewProduction(BaseModel):
     topic: str = Field(min_length=2, max_length=500)
     instructions: str = Field(default="", max_length=3000)
     minutes: int = Field(default=10, ge=3, le=40)
     channel_id: str | None = Field(default=None, max_length=40)
     script_format: str | None = Field(default=None, max_length=30)
+    image_source: str | None = Field(default=None, pattern="^(ai|manual)$")
 
 
 @app.post("/api/productions")
@@ -177,6 +244,8 @@ def new_production(body: NewProduction):
         raise HTTPException(400, "없는 채널입니다")
     pid = producer.create(body.topic.strip(), body.instructions.strip(), body.minutes, body.channel_id or None,
                           body.script_format if body.script_format in planner.FORMATS else None)
+    if body.image_source:
+        db.kv_set("imgsrc:" + pid, body.image_source)
     WORKER.submit(pid)
     return {"id": pid}
 

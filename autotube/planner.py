@@ -36,8 +36,15 @@ PLAN_PROMPT = """[주제/명령]
 [비슷한 주제에서 성과가 좋았던 영상 분석(원리만 참고, 복제 금지)]
 {examples}
 
+[성과 좋은 영상들의 화면 구성 (학습 결과) — visual.source 배분을 이 비율에 가깝게]
+{visual_mix}
+
 [대본 틀 — 주인이 좋아하는 레퍼런스 영상들의 공통 구조]
 {format_block}
+화면 원칙(실제 다큐처럼): 실제로 존재하는 것(공정·장비·장소·실험·제품·자연현상)은 visual.source="real"로 하고 stock_query를
+구체적으로(예: "silicon ingot growth", "wafer fab cleanroom") — 실제 자료 영상·사진을 찾아 쓴다. 상상·개념·미래·비유 장면만 "illustration".
+원리 설명은 "diagram"(단순한 도식 이미지 + 화면 글자). 과학자·인물의 실제 발언을 인용하면 source="person", person=영문 이름,
+quote에 발언(확실한 것만, 지어내기 금지 — fact_check에도 적기). 인용은 영상 전체에서 1~3개면 충분.
 공통 원칙: 30초 안에 통념을 뒤집거나 큰 질문을 던진다 / 시청자가 지금 어디쯤인지 알 수 있는 뼈대(사례 번호·단계·챕터 질문) /
 막연한 설명 대신 구체적 숫자·날짜·이름(확인 필요하면 fact_check에) / 중반에 반례·반대 의견으로 긴장을 다시 만든다 /
 희망 → 요약 → 열린 질문으로 끝내고 채널 고정 끝인사 / 짧은 문장, 핵심 문장 뒤에는 쉼(pause_after) /
@@ -73,8 +80,11 @@ PLAN_PROMPT = """[주제/명령]
      "importance": 1~3 (3=훅·반전·챕터 시작처럼 시각적으로 가장 중요한 장면),
      "beat": "이 장면이 속한 틀의 비트 이름",
      "pause_after": true/false (핵심 문장 직후라 1~2초 음악만 흐르게 할 장면, 영상 전체에서 4~8개),
-     "visual": {{"prompt": "English, concrete cinematic description of what is on screen, no text, no logos",
-                 "stock_query": "2-4 English words for stock footage search"}},
+     "visual": {{"source": "real|illustration|person|diagram",
+                 "prompt": "English, concrete cinematic description of what is on screen, no text, no logos",
+                 "stock_query": "2-4 English words for stock/archive footage search (e.g. silicon wafer cleanroom)",
+                 "person": "실존 인물이 화면에 나올 때만 영문 이름 (예: Gordon Moore), 아니면 빈칸"}},
+     "quote": {{"text": "실제로 한 말의 한국어 번역(확실할 때만)", "by": "말한 사람", "when": "연도·출처"}} 또는 null,
      "emotion": "curiosity|tension|surprise|relief|inspiration|fear|humor|nostalgia"}}
  ]
 }}"""
@@ -157,6 +167,16 @@ def _recent_titles():
             db.rows("SELECT topic, plan FROM productions WHERE plan IS NOT NULL ORDER BY created_at DESC LIMIT 8")]
 
 
+def _visual_mix():
+    try:
+        vm = learner.visual_mix_target()
+    except Exception:
+        vm = None
+    if not vm:
+        return "(아직 데이터 부족 — 기본: 실제 자료 50% 이상, 도식 20%, 일러스트 30% 이하)"
+    return json.dumps(vm, ensure_ascii=False)[:2500]
+
+
 def _studies(cid):
     try:
         from . import channel_study
@@ -201,6 +221,7 @@ def build_prompt(topic, instructions, minutes, features, channel=None, script_fo
     return PLAN_PROMPT.format(
         topic=topic, channel=ch_text, format_block=format_block(script_format),
         studies=_studies((channel or {}).get("id")),
+        visual_mix=_visual_mix(),
         style_guide=(channel or {}).get("style_guide") or "(아직 없음)", instructions=("[추가 지시]\n" + instructions) if instructions else "", minutes=minutes,
         chars_min=int(total * cps * 0.85), chars_max=int(total * cps * 1.1),
         scenes_min=int(total / 10), scenes_max=int(total / 6),
@@ -222,6 +243,14 @@ def validate(plan, minutes, cps=None):
         if not isinstance(s["visual"], dict):
             s["visual"] = {"prompt": str(s["visual"])}
         s["visual"].setdefault("prompt", s["narration"][:80])
+        if s["visual"].get("source") not in ("real", "illustration", "person", "diagram"):
+            s["visual"]["source"] = "illustration"
+        s["visual"]["person"] = str(s["visual"].get("person") or "").strip()[:60]
+        if s["visual"]["source"] == "person" and not s["visual"]["person"]:
+            s["visual"]["source"] = "real"
+        q = s.get("quote")
+        s["quote"] = ({"text": str(q.get("text", ""))[:120], "by": str(q.get("by", ""))[:40], "when": str(q.get("when", ""))[:40]}
+                      if isinstance(q, dict) and q.get("text") and q.get("by") else None)
         s["visual"].setdefault("stock_query", plan.get("title", "")[:30])
         try:
             s["importance"] = int(s.get("importance", 1))
