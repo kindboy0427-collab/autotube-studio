@@ -29,6 +29,16 @@ def _headers():
     return {"x-goog-api-key": _key()}
 
 
+def _learning_headers():
+    """Watching/analysis uses the free-tier key when one is set (billing stays for TTS, images, video)."""
+    free = config.get_secret("GEMINI_FREE_API_KEY")
+    return {"x-goog-api-key": free} if free else _headers()
+
+
+def free_key_set():
+    return bool(config.get_secret("GEMINI_FREE_API_KEY"))
+
+
 def _texts_from_interaction(res: dict) -> str:
     out = []
     for step in res.get("steps", []) or []:
@@ -77,15 +87,16 @@ def watch_youtube(url: str, prompt: str, duration_seconds: int = 0, model: str |
     s = config.load_settings()
     model = model or s["providers"]["gemini_watch_model"]
     est_tokens = max(60, duration_seconds) * 300  # ~258 frame + 32 audio tokens per second
-    cost = est_tokens / 1e6 * s["prices"]["gemini_watch_per_mtok"]
+    cost = 0.0 if free_key_set() else est_tokens / 1e6 * s["prices"]["gemini_watch_per_mtok"]
     budget.check(cost)
     body = {"model": model, "input": [{"type": "text", "text": prompt}, {"type": "video", "uri": url}]}
-    res = http.post_json(BASE + "/interactions", body, headers=_headers(), timeout=900, retries=1)
+    res = http.post_json(BASE + "/interactions", body, headers=_learning_headers(), timeout=900, retries=1)
     text = _texts_from_interaction(res)
     if not text.strip():
         raise GeminiError("영상 분석 결과가 비어 있습니다")
     tin, tout = _usage_tokens(res, est_tokens, len(text) // 2)
-    budget.record("gemini_watch", tin + tout, tin / 1e6 * s["prices"]["gemini_watch_per_mtok"], url)
+    paid = 0.0 if free_key_set() else tin / 1e6 * s["prices"]["gemini_watch_per_mtok"]
+    budget.record("gemini_watch_free" if free_key_set() else "gemini_watch", tin + tout, paid, url)
     return text
 
 

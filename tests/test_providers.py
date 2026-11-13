@@ -104,3 +104,17 @@ class Providers(TempHome):
             stock.find_video("q", 8, used, "o.mp4")
         self.assertEqual(dl.call_args[0][0], "L2")
         self.assertEqual(used, {2})
+
+
+class FreeLearningKey(TempHome):
+    def test_watch_uses_free_key_and_costs_nothing(self):
+        config.set_secrets({"GEMINI_API_KEY": "paid", "GEMINI_FREE_API_KEY": "free"})
+        sent = {}
+
+        def fake(url, body, headers=None, **kw):
+            sent["key"] = headers["x-goog-api-key"]
+            return {"steps": [{"type": "model_output", "content": [{"type": "text", "text": '{"summary":"ok"}'}]}]}
+        with patch("autotube.http.post_json", side_effect=fake):
+            gemini.watch_youtube("https://www.youtube.com/watch?v=abcdefghijk", "분석", 600)
+        self.assertEqual(sent["key"], "free")
+        self.assertEqual(budget.spent_today(), 0)

@@ -21,6 +21,7 @@ _LOCK = threading.RLock()
 
 SECRET_KEYS = {
     "GEMINI_API_KEY": "Google Gemini API (영상 시청·분석, 내레이션·내 목소리, 이미지, 영상 생성)",
+    "GEMINI_FREE_API_KEY": "Gemini 무료 키 — 영상 학습 전용 (결제 연결 안 된 새 프로젝트의 키, 하루 8시간 무료 시청)",
     "YOUTUBE_API_KEY": "YouTube Data API v3 (검색·통계·댓글)",
     "OPENAI_API_KEY": "OpenAI API (대본, 보조 음성)",
     "ELEVENLABS_API_KEY": "ElevenLabs (내 목소리 복제·감정 연기·배경음악)",

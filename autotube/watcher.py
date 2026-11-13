@@ -239,9 +239,11 @@ def watch_next(n=None, watcher=None, transcript_watcher=None) -> int:
     mode = s.get("watch_mode", "auto")
     transcript_watcher = transcript_watcher or transcripts.watch_via_transcript
     full_limit = int(s.get("gemini_full_watch_per_day", 10))
+    if gemini.free_key_set():  # free tier: watch fully until the free daily hours run out
+        full_limit = 10 ** 6
     for v in _pick_queue(n):
         use = watcher
-        over = (not s.get("gemini_paid_tier")
+        over = ((gemini.free_key_set() or not s.get("gemini_paid_tier"))
                 and watched_seconds_today() + (v.get("duration_seconds") or 0) > s["free_tier_watch_hours"] * 3600)
         captions_ok = _transcript_ok() or transcript_watcher is not transcripts.watch_via_transcript
         if mode == "hybrid":

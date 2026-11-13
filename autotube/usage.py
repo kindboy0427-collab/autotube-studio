@@ -12,7 +12,7 @@ import json
 from . import budget, channels, config, db
 
 UNIT_NAMES = {
-    "gemini_text": "토큰", "openai_text": "토큰", "gemini_watch": "토큰", "gemini_image": "장",
+    "gemini_text": "토큰", "openai_text": "토큰", "gemini_watch": "토큰", "gemini_watch_free": "토큰", "gemini_image": "장",
     "gemini_video": "초", "elevenlabs_tts": "글자", "openai_tts": "글자", "edge_tts": "글자(무료)",
     "elevenlabs_music": "분", "youtube_quota": "할당량 단위", "claude_subscription": "글자(요금제)",
     "codex_subscription": "글자(요금제)", "apify_transcript": "편",
@@ -20,7 +20,7 @@ UNIT_NAMES = {
 LABELS = {
     "gemini_text": "대본·검수 (Gemini)", "openai_text": "대본·검수 (OpenAI)", "gemini_image": "AI 이미지",
     "gemini_video": "AI 영상 클립", "elevenlabs_tts": "내레이션 (ElevenLabs)", "openai_tts": "내레이션 (OpenAI)",
-    "edge_tts": "내레이션 (무료 Edge)", "elevenlabs_music": "배경음악", "gemini_watch": "AI 영상 시청·분석",
+    "edge_tts": "내레이션 (무료 Edge)", "elevenlabs_music": "배경음악", "gemini_watch": "AI 영상 시청·분석", "gemini_watch_free": "AI 영상 시청·분석 (무료 키)",
     "youtube_quota": "YouTube API 할당량", "claude_subscription": "대본·검수 (Claude Pro 요금제, 추가비용 0)",
     "codex_subscription": "대본·검수 (ChatGPT Plus 요금제, 추가비용 0)", "apify_transcript": "자막 분석 (Apify)",
 }
