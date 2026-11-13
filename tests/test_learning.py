@@ -73,6 +73,7 @@ class LearningTest(TempHome):
         self.assertEqual(n, 2)  # 900 s each, 1800 s allowed
 
     def test_planner_validates_and_expands(self):
+        config.save_settings({"production": {"min_real_ratio": 0}})
         calls = []
 
         def gen(prompt):

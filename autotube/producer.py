@@ -34,6 +34,7 @@ class Providers:
     archive_video = staticmethod(archive.find_video)
     archive_photo = staticmethod(archive.find_photo)
     person_photo = staticmethod(archive.find_person)
+    person_video = staticmethod(archive.find_person_video)
     music = staticmethod(music.get_track)
 
     @staticmethod
@@ -110,7 +111,7 @@ CHAINS = {
     "ai_image": ["my_image", "ai_image", "stock_video", "stock_photo"],
     "diagram": ["my_image", "ai_image", "stock_photo"],
     "real": ["archive_video", "stock_video", "archive_photo", "stock_photo", "ai_image"],
-    "person": ["person_photo", "archive_photo", "stock_photo", "ai_image"],
+    "person": ["person_video", "person_photo", "archive_photo", "stock_photo", "ai_image"],
     "stock_video": ["stock_video", "stock_photo", "ai_image"],
 }
 
@@ -187,6 +188,12 @@ def _visual(pid, s, i, d, folder, used, providers, credits, manual=False, out=No
                         "cinematic lighting, highly detailed, no text, no watermark"
                     providers.ai_image(prompt + ", " + style, p, production_id=pid)
                 return k, p
+            if k == "person_video":
+                p = str(folder / f"s{i:03d}_person.mp4")
+                if not Path(p).exists():
+                    _, meta = providers.person_video(s["visual"].get("person", ""), used, p)
+                    credits.append(meta)
+                return "stock_video", p
             if k in ("archive_video", "stock_video"):
                 p = str(folder / f"s{i:03d}_{'archive' if k == 'archive_video' else 'stock'}.mp4")
                 if not Path(p).exists():

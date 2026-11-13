@@ -7,7 +7,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-UA = "AutoTubeStudio/1.0 (personal creator tool)"
+UA = "AutoTubeStudio/1.8 (personal creator tool; https://github.com/kindboy0427-collab/autotube-studio)"
 
 
 class HttpError(RuntimeError):

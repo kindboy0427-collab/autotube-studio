@@ -264,3 +264,19 @@ class ArchiveParsing(TempHome):
         self.assertEqual([x["page"] for x in r], ["p1"])
         self.assertEqual(r[0]["author"], "Jane")
         self.assertEqual(r[0]["url"], "t1")
+
+
+class RealRatio(TempHome):
+    def test_plan_regenerated_when_too_little_real_footage(self):
+        from autotube import planner
+        calls = []
+
+        def gen(prompt):
+            calls.append(prompt)
+            src = "illustration" if len(calls) == 1 else "real"
+            return {"title": f"t{len(calls)}", "scenes": [{"narration": "문장입니다 " * 8, "visual": {"source": src, "stock_query": "wafer"}}
+                                                       for _ in range(8)]}
+        config.save_settings({"production": {"self_review": False}})
+        plan = planner.make_plan("반도체", minutes=1, generate=gen)
+        self.assertTrue(any("실제 자료(real/person) 장면이" in c for c in calls))
+        self.assertTrue(all(s["visual"]["source"] == "real" for s in plan["scenes"]))

@@ -45,6 +45,7 @@ PLAN_PROMPT = """[주제/명령]
 구체적으로(예: "silicon ingot growth", "wafer fab cleanroom") — 실제 자료 영상·사진을 찾아 쓴다. 상상·개념·미래·비유 장면만 "illustration".
 원리 설명은 "diagram"(단순한 도식 이미지 + 화면 글자). 과학자·인물의 실제 발언을 인용하면 source="person", person=영문 이름,
 quote에 발언(확실한 것만, 지어내기 금지 — fact_check에도 적기). 인용은 영상 전체에서 1~3개면 충분.
+**실제 자료가 핵심이다: real + person 장면이 전체 장면의 {min_real}% 이상이어야 한다.** AI 일러스트는 실제로 찍을 수 없는 장면(원자 내부, 미래, 비유)에만.
 공통 원칙: 30초 안에 통념을 뒤집거나 큰 질문을 던진다 / 시청자가 지금 어디쯤인지 알 수 있는 뼈대(사례 번호·단계·챕터 질문) /
 막연한 설명 대신 구체적 숫자·날짜·이름(확인 필요하면 fact_check에) / 중반에 반례·반대 의견으로 긴장을 다시 만든다 /
 희망 → 요약 → 열린 질문으로 끝내고 채널 고정 끝인사 / 짧은 문장, 핵심 문장 뒤에는 쉼(pause_after) /
@@ -220,6 +221,7 @@ def build_prompt(topic, instructions, minutes, features, channel=None, script_fo
         ch_text = json.dumps({k: channel.get(k) for k in ("name", "niches", "audience", "tone")}, ensure_ascii=False)
     return PLAN_PROMPT.format(
         topic=topic, channel=ch_text, format_block=format_block(script_format),
+        min_real=int(float(config.load_settings()["production"].get("min_real_ratio", 0.6)) * 100),
         studies=_studies((channel or {}).get("id")),
         visual_mix=_visual_mix(),
         style_guide=(channel or {}).get("style_guide") or "(아직 없음)", instructions=("[추가 지시]\n" + instructions) if instructions else "", minutes=minutes,
@@ -336,6 +338,17 @@ def make_plan(topic, instructions="", minutes=None, production_id=None, generate
         try:
             plan2 = validate(more, minutes, cps)
             if plan2["_stats"]["chars"] > plan["_stats"]["chars"]:
+                plan = plan2
+        except PlanError:
+            pass
+    real_ratio = lambda pl: sum(1 for x in pl["scenes"] if x["visual"].get("source") in ("real", "person")) / max(1, len(pl["scenes"]))
+    need = float(config.load_settings()["production"].get("min_real_ratio", 0.6))
+    if real_ratio(plan) < need:
+        try:
+            plan2 = validate(generate(prompt + f"\n\n[수정 요청] 실제 자료(real/person) 장면이 {real_ratio(plan):.0%}로 부족하다. "
+                                               f"{need:.0%} 이상이 되도록, 실제로 존재하는 공정·장비·장소·인물 장면으로 visual.source와 "
+                                               "stock_query를 다시 배분해서 JSON 전체를 다시 출력하라."), minutes, cps)
+            if real_ratio(plan2) > real_ratio(plan):
                 plan = plan2
         except PlanError:
             pass

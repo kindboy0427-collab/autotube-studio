@@ -34,13 +34,16 @@ def _license_ok(name):
 def commons_search(query, kind="image", limit=12):
     """kind: image | video. Returns [{url, page, author, license, w, h, mime}] with usable licenses only."""
     ft = "filetype:video" if kind == "video" else "filetype:bitmap"
-    res = http.get_json(COMMONS, params={
-        "action": "query", "format": "json", "generator": "search", "gsrnamespace": 6,
-        "gsrsearch": f"{query} {ft}", "gsrlimit": limit, "prop": "imageinfo",
-        "iiprop": "url|size|mime|extmetadata", "iiurlwidth": 1920}, timeout=30, retries=1)
+    params = {"action": "query", "format": "json", "generator": "search", "gsrnamespace": 6,
+              "gsrsearch": f"{query} {ft}", "gsrlimit": limit}
+    if kind == "video":  # videoinfo gives ready-made 720p/480p transcodes instead of huge originals
+        params.update({"prop": "videoinfo", "viprop": "url|size|mime|extmetadata|derivatives"})
+    else:
+        params.update({"prop": "imageinfo", "iiprop": "url|size|mime|extmetadata", "iiurlwidth": 1920})
+    res = http.get_json(COMMONS, params=params, timeout=30, retries=1)
     out = []
     for p in ((res.get("query") or {}).get("pages") or {}).values():
-        ii = (p.get("imageinfo") or [{}])[0]
+        ii = (p.get("videoinfo") or p.get("imageinfo") or [{}])[0]
         meta = ii.get("extmetadata") or {}
         lic = _clean((meta.get("LicenseShortName") or {}).get("value"))
         if not _license_ok(lic):
@@ -53,7 +56,15 @@ def commons_search(query, kind="image", limit=12):
         w, h = ii.get("width") or 0, ii.get("height") or 0
         if kind == "image" and (w < 800 or h < 450):
             continue
-        out.append({"url": ii.get("thumburl") if kind == "image" and ii.get("thumburl") else ii.get("url"),
+        url = ii.get("thumburl") if kind == "image" and ii.get("thumburl") else ii.get("url")
+        if kind == "video":
+            ders = [dv for dv in (ii.get("derivatives") or []) if "webm" in str(dv.get("type", "")) or str(dv.get("src", "")).endswith((".webm", ".mp4"))]
+            ders = sorted(ders, key=lambda dv: abs((dv.get("height") or 0) - 720))
+            if ders:
+                url = ders[0]["src"]
+            elif (ii.get("size") or 0) > 400 * 1024 * 1024:
+                continue  # original too large to download
+        out.append({"url": url,
                     "page": ii.get("descriptionurl"), "author": _clean((meta.get("Artist") or {}).get("value")) or "Unknown",
                     "license": lic, "w": w, "h": h, "mime": mime, "title": p.get("title", ""), "source": "Wikimedia Commons"})
     # landscape first
@@ -133,6 +144,18 @@ def find_photo(query, used, out_path, space=False):
         used.add(key)
         return out_path, {k: c.get(k) for k in ("source", "author", "license", "page", "title")}
     raise ArchiveError(f"실제 자료 사진 없음: {query}")
+
+
+def find_person_video(name, used, out_path):
+    """Freely licensed footage of the person (lectures, talks on Commons) - only if the file is clearly about them."""
+    last = (name.split() or [""])[-1].lower()
+    for c in commons_search(name, "video", limit=10):
+        if c["page"] in used or last not in (c.get("title") or "").lower():
+            continue
+        http.download(c["url"], out_path, timeout=300)
+        used.add(c["page"])
+        return out_path, {k: c.get(k) for k in ("source", "author", "license", "page", "title")}
+    raise ArchiveError(f"인물 영상 없음: {name}")
 
 
 def find_person(name, used, out_path):
