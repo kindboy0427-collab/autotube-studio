@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoTube Studio</title>
+<link rel="stylesheet" href="/static/app.css">
+<script>window.TOKEN="__TOKEN__";</script>
+</head>
+<body>
+<header>
+  <div class="brand">AutoTube <span>Studio</span> <small id="ver" class="hint"></small></div>
+  <nav>
+    <button data-tab="home" class="on">대시보드</button>
+    <button data-tab="channels">채널</button>
+    <button data-tab="make">영상 만들기</button>
+    <button data-tab="voice">목소리</button>
+    <button data-tab="list">제작 목록</button>
+    <button data-tab="usage">사용량·주기</button>
+    <button data-tab="learn">AI 학습</button>
+    <button data-tab="settings">설정</button>
+    <button id="btnQuit" title="창을 닫아도 AI 학습은 계속됩니다. 완전히 끄려면 누르세요">프로그램 종료</button>
+  </nav>
+</header>
+<div id="updBar" class="msg" hidden></div>
+<main>
+  <section id="home" class="tab on">
+    <div class="grid4">
+      <div class="card"><small>AI가 시청·분석한 영상</small><b id="kWatched">-</b><em id="kQueue"></em></div>
+      <div class="card"><small>학습된 성과 패턴</small><b id="kPatterns">-</b><em id="kState"></em></div>
+      <div class="card"><small>오늘 비용(추정)</small><b id="kToday">-</b><em id="kMonth"></em></div>
+      <div class="card"><small>YouTube 할당량 오늘</small><b id="kQuota">-</b><em id="kYt"></em></div>
+    </div>
+    <div class="cols">
+      <div class="panel"><h3>준비 상태</h3><ul id="checklist" class="check"></ul></div>
+      <div class="panel"><h3>최근 활동</h3><div id="events" class="log"></div></div>
+    </div>
+  </section>
+
+  <section id="make" class="tab">
+    <div class="panel narrow">
+      <h3>무엇을 만들까요?</h3>
+      <label>채널</label>
+      <select id="makeChannel"></select>
+      <label>주제 또는 명령</label>
+      <textarea id="topic" rows="3" placeholder="예) 조선시대 왕들이 실제로 먹던 음식 이야기 / 초보자를 위한 ETF 투자 완전정복"></textarea>
+      <label>추가 지시 (선택)</label>
+      <textarea id="instr" rows="3" placeholder="예) 차분한 다큐 톤, 20~40대 대상, 마지막에 시청자 경험 질문"></textarea>
+      <label>대본 틀 (좋아하는 레퍼런스 영상 구조)</label>
+      <select id="makeFormat"></select>
+      <div class="row">
+        <div><label>길이(분)</label><input id="minutes" type="number" min="3" max="40" value="10"></div>
+        <div class="grow"><label>&nbsp;</label><button id="btnMake" class="primary">AI에게 제작 맡기기</button></div>
+      </div>
+      <p class="hint">대본 → 내레이션 → AI 영상·이미지·스톡 → 배경음악 → 자막 → 렌더 → 썸네일 → <b>비공개 업로드</b>까지 자동으로 진행합니다. 공개는 검토 후 직접 누릅니다.</p>
+      <div id="makeMsg"></div>
+    </div>
+  </section>
+
+  <section id="voice" class="tab">
+    <div class="cols">
+      <div class="panel">
+        <h3>내 목소리 등록</h3>
+        <p class="hint">조용한 방에서, <b>같은 마이크·같은 자리</b>에서 두 개를 녹음하세요 (휴대폰 녹음 앱도 됩니다). 파일은 이 PC에서 선택한 서비스로만 보내집니다.</p>
+        <label>① 목소리 샘플 — 아래 문장을 평소 말투로 읽기 (20~30초, 일레븐랩스용은 길수록 좋음)</label>
+        <div id="vSample" class="pre"></div>
+        <input id="vSrc" type="file" accept="audio/*,video/*">
+        <label>② 동의 녹음 — Gemini용. 아래 문장을 <b>정확히 그대로</b> 읽기</label>
+        <div id="vConsent" class="pre"></div>
+        <input id="vCon" type="file" accept="audio/*,video/*">
+        <div class="row">
+          <div class="grow"><label>이름</label><input id="vName" value="내 목소리"></div>
+          <div><label>등록할 곳</label>
+            <div><label class="inline"><input type="checkbox" id="vG" checked> Gemini</label>
+            <label class="inline"><input type="checkbox" id="vE"> ElevenLabs</label></div></div>
+        </div>
+        <button id="vReg" class="primary">등록하기</button>
+        <div id="vMsg" class="hint"></div>
+        <details><summary>이미 만든 목소리 ID 직접 넣기 (AI Studio에서 디자인한 voice_… 또는 ElevenLabs ID)</summary>
+          <div class="row"><input id="mName" placeholder="이름"><select id="mEng"><option value="gemini">Gemini</option><option value="elevenlabs">ElevenLabs</option></select>
+          <input id="mRef" class="grow" placeholder="voice_... / ElevenLabs voice id"><button id="mAdd">추가</button></div></details>
+        <h3>등록된 목소리</h3><div id="vList"></div>
+      </div>
+      <div class="panel">
+        <h3>목소리 오디션</h3>
+        <p class="hint">같은 문장을 여러 목소리로 만들어 나란히 들어보고, 채널마다 가장 맞는 목소리를 고르세요. (한 번에 몇 원 수준)</p>
+        <label>읽을 문장</label>
+        <textarea id="aText" rows="4">밤하늘의 별은 왜 반짝일까요? 사실 별빛이 흔들리는 건 별 때문이 아닙니다. 우리 머리 위, 바로 이 공기 때문이죠.</textarea>
+        <label>톤 (선택)</label><input id="aTone" placeholder="예) 경이로움을 주는 차분한 다큐 내레이션">
+        <label>비교할 목소리 (최대 6개)</label><div id="aCands"></div>
+        <button id="aRun" class="primary">오디션 시작</button>
+        <div id="aOut"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="channels" class="tab">
+    <div class="panel">
+      <h3>분야별 채널</h3>
+      <p class="hint">채널마다 분야·시청자·말투·목소리·YouTube 계정·제작 규칙이 따로 있습니다. AI 학습도 채널 분야별로 따로 쌓입니다.</p>
+      <div id="presetBox" class="row"></div>
+      <div id="chList"></div>
+    </div>
+    <div class="panel" id="chEdit" hidden></div>
+  </section>
+
+  <section id="usage" class="tab">
+    <div class="panel">
+      <h3>영상 1편에 실제로 드는 사용량</h3>
+      <div class="row"><div><label>월 예산($)</label><input id="uBudget" type="number" min="0" step="5"></div><div><button id="btnCalc" class="primary">다시 계산</button></div></div>
+      <div id="uSummary"></div>
+    </div>
+    <div class="cols">
+      <div class="panel"><h3>채널별 권장 제작 주기</h3><div id="uChannels"></div></div>
+      <div class="panel"><h3>최근 완성 영상</h3><div id="uRecent"></div></div>
+    </div>
+  </section>
+
+  <section id="list" class="tab">
+    <div class="panel"><h3>제작 목록</h3><div id="prodList"></div></div>
+    <div class="panel" id="detail" hidden></div>
+  </section>
+
+  <section id="learn" class="tab">
+    <div class="cols">
+      <div class="panel">
+        <h3>학습된 플레이북</h3>
+        <div id="pbMeta" class="hint"></div>
+        <div id="pbDo"></div>
+        <h4>피해야 할 것</h4><div id="pbAvoid"></div>
+        <h4>주간 정리</h4><div id="pbNarr" class="pre"></div>
+      </div>
+      <div class="panel">
+        <h3>학습 제어</h3>
+        <div class="row"><button id="btnLearn" class="primary">지금 학습 1회 실행</button></div>
+        <label>분석할 영상 직접 추가 (유튜브 주소)</label>
+        <div class="row"><input id="addUrl" class="grow" placeholder="https://www.youtube.com/watch?v=..."><label class="inline"><input type="checkbox" id="addFav"> 내 취향 레퍼런스</label><button id="btnAdd">추가</button></div>
+        <div id="learnMsg" class="hint"></div>
+        <h3>최근 시청·분석</h3><div id="recent"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="settings" class="tab">
+    <div class="cols">
+      <div class="panel">
+        <h3>API 키</h3>
+        <p class="hint">이 PC의 data/secrets.json 에만 저장됩니다. 빈칸으로 두면 기존 값 유지.</p>
+        <div id="keys"></div>
+        <button id="btnKeys" class="primary">키 저장</button>
+        <h3>YouTube 채널 연결 (업로드용)</h3>
+        <div id="ytBox"></div>
+      </div>
+      <div class="panel">
+        <h3>학습 분야</h3>
+        <label>쉼표로 구분 (AI가 이 분야 영상을 찾아 시청합니다)</label>
+        <input id="niches" placeholder="예) 한국사 미스터리, 재테크, 과학 다큐">
+        <div class="row">
+          <div><label>하루 최대 시청 수</label><input id="maxWatch" type="number" min="0" max="2000"></div>
+          <div><label>Gemini 유료 등급</label><select id="paidTier"><option value="false">아니오(하루 8시간)</option><option value="true">예(시간 제한 없음)</option></select></div>
+        </div>
+        <h3>제작 기본값</h3>
+        <div class="row">
+          <div><label>AI 영상 클립 수/편</label><input id="maxVideo" type="number" min="0" max="40"></div>
+          <div><label>AI 이미지 비율</label><input id="imgRatio" type="number" min="0" max="1" step="0.05"></div>
+          <div><label>1편 예산($)</label><input id="perVideo" type="number" min="0" step="1"></div>
+        </div>
+        <div class="row">
+          <div><label>하루 예산($)</label><input id="daily" type="number" min="0" step="1"></div>
+          <div><label>월 예산($)</label><input id="monthly" type="number" min="0" step="1"></div>
+          <div><label>비공개 자동 업로드</label><select id="autoUp"><option value="true">켜기</option><option value="false">끄기</option></select></div>
+        </div>
+        <div class="row">
+          <div><label>대본 AI</label><select id="scriptP"><option value="auto">자동 (Claude Pro → ChatGPT Plus → API)</option><option value="claude_code">Claude Pro 우선</option><option value="codex">ChatGPT Plus 우선</option><option value="openai">OpenAI API</option><option value="gemini">Gemini API</option></select></div>
+          <div><label>음성</label><select id="ttsP"><option value="auto">자동 (Gemini → ElevenLabs → OpenAI → Edge)</option><option value="gemini">Gemini TTS</option><option value="elevenlabs">ElevenLabs</option><option value="openai">OpenAI</option><option value="edge">무료(Edge)</option></select></div>
+          <div><label>Gemini 기본 목소리</label><input id="gVoice"></div>
+          <div class="grow"><label>ElevenLabs 기본 목소리 ID</label><input id="voiceId"></div>
+        </div>
+        <div class="row">
+          <div><label>자동 업데이트</label><select id="autoUpd"><option value="true">켜기 (추천)</option><option value="false">끄기</option></select></div>
+          <div class="grow"><label>&nbsp;</label><button id="btnUpd">지금 업데이트 확인</button> <small id="updInfo" class="hint"></small></div>
+        </div>
+        <button id="btnSettings" class="primary">설정 저장</button>
+        <p class="hint">모델 이름·단가 등 세부 설정은 data/settings.json 에서 바꿀 수 있습니다.</p>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

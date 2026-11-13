@@ -1,0 +1,7 @@
+__pycache__/
+.venv/
+data/
+output/
+assets/music/*
+!assets/music/README.txt
+install_log.txt
