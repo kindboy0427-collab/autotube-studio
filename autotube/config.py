@@ -37,14 +37,16 @@ DEFAULTS = {
         "enabled": True,
         "niches": [],                    # e.g. ["재테크", "역사 미스터리"]; empty = learn from production topics only
         "max_searches_per_day": 40,      # search.list = 100 quota units each
-        "max_watch_per_day": 60,         # videos analysed by Gemini per day
+        "max_watch_per_day": 60,         # videos analysed per day (all methods)
+        "gemini_full_watch_per_day": 10, # hybrid: best outliers watched by Gemini (picture+sound), the rest via captions
         "free_tier_watch_hours": 8.0,    # Gemini free tier limit for YouTube URLs
         "gemini_paid_tier": False,       # True = no hour cap (paid Gemini API tier)
         "min_duration_seconds": 240,     # long-form only
         "max_duration_seconds": 3600,
         "published_within_days": 180,
         "watch_batch": 4,                # videos per scheduler tick
-        "watch_mode": "auto",            # auto: Gemini (picture+sound), then Apify captions when the free hours run out
+        "watch_mode": "hybrid",          # hybrid: top N/day full watch by Gemini + rest captions (cheap, ~$0.003 each)
+                                         # auto: Gemini until the free-tier hours run out, then captions
                                          # gemini: Gemini only / transcript: captions only (cheapest)
         "tick_minutes": 20,
     },

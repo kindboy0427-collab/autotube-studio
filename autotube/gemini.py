@@ -76,7 +76,7 @@ def watch_youtube(url: str, prompt: str, duration_seconds: int = 0, model: str |
     """Gemini watches a PUBLIC YouTube video (picture + sound) from its URL. No download."""
     s = config.load_settings()
     model = model or s["providers"]["gemini_watch_model"]
-    est_tokens = max(60, duration_seconds) * 100
+    est_tokens = max(60, duration_seconds) * 300  # ~258 frame + 32 audio tokens per second
     cost = est_tokens / 1e6 * s["prices"]["gemini_watch_per_mtok"]
     budget.check(cost)
     body = {"model": model, "input": [{"type": "text", "text": prompt}, {"type": "video", "uri": url}]}

@@ -38,7 +38,7 @@ class LearningTest(TempHome):
         self.assertIn("opens_with:curiosity", f)
 
     def test_watch_store_and_learn_lift(self):
-        config.save_settings({"learning": {"watch_batch": 30, "max_watch_per_day": 100, "gemini_paid_tier": True}})
+        config.save_settings({"learning": {"watch_batch": 30, "max_watch_per_day": 100, "gemini_paid_tier": True, "watch_mode": "gemini"}})
         rng = random.Random(1)
         for i in range(24):
             add_video(i, outlier=rng.uniform(0.1, 1) + (3 if i % 2 == 0 else 0))
@@ -136,3 +136,27 @@ class WebTest(TempHome):
             self.assertEqual(c.get("/media/x/../../secrets.json").status_code, 404)
             self.assertEqual(c.get("/", headers={"host": "evil.com"}).status_code, 403)
             self.assertIn("playbook", c.get("/api/learning").json())
+
+
+class HybridWatch(TempHome):
+    def test_top_outliers_full_watch_rest_captions(self):
+        config.save_settings({"learning": {"watch_batch": 10, "max_watch_per_day": 100, "watch_mode": "hybrid",
+                                           "gemini_full_watch_per_day": 3}})
+        for i in range(8):
+            add_video(i, outlier=10 - i)
+        used = []
+
+        def full(url, prompt, dur):
+            used.append(("full", url[-8:]))
+            return json.dumps(analysis("question", ["open_loop"], 1), ensure_ascii=False)
+
+        def captions(v, prompt):
+            used.append(("cap", v["id"][-8:]))
+            return analysis("question", ["open_loop"], 1)
+        with patch("autotube.youtube_data.top_comments", return_value=[]), \
+                patch("autotube.watcher.watch_video", side_effect=lambda v, w, counts_gemini_hours=True:
+                      full("x" + v["id"], "", 0) if counts_gemini_hours else captions(v, "")):
+            watcher.watch_next(8, watcher=full, transcript_watcher=captions)
+        self.assertEqual([k for k, _ in used].count("full"), 3)
+        self.assertEqual([k for k, _ in used].count("cap"), 5)
+        self.assertEqual(used[0][0], "full")  # strongest outliers get the full watch

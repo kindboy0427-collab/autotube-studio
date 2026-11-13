@@ -103,6 +103,10 @@ def discover(query: str, niche: str = "", order: str = "viewCount") -> int:
     return added
 
 
+def gemini_watches_today():
+    return db.kv_get("gemini_watch_count:" + db.kst_day(), 0)
+
+
 def watched_seconds_today():
     return db.kv_get("watch_seconds:" + db.kst_day(), 0)
 
@@ -234,17 +238,28 @@ def watch_next(n=None, watcher=None, transcript_watcher=None) -> int:
     count = 0
     mode = s.get("watch_mode", "auto")
     transcript_watcher = transcript_watcher or transcripts.watch_via_transcript
+    full_limit = int(s.get("gemini_full_watch_per_day", 10))
     for v in _pick_queue(n):
         use = watcher
         over = (not s.get("gemini_paid_tier")
                 and watched_seconds_today() + (v.get("duration_seconds") or 0) > s["free_tier_watch_hours"] * 3600)
-        if mode == "transcript" or (over and mode == "auto" and (_transcript_ok() or transcript_watcher is not transcripts.watch_via_transcript)):
+        captions_ok = _transcript_ok() or transcript_watcher is not transcripts.watch_via_transcript
+        if mode == "hybrid":
+            # queue order = taste references, then strongest outliers -> they get the full Gemini watch
+            if gemini_watches_today() >= full_limit or over:
+                if not captions_ok:
+                    db.event("info", "watch", "오늘 Gemini 전체 시청 한도 도달 — 나머지 자막 분석은 Apify 키가 있어야 합니다")
+                    break
+                use = transcript_watcher
+        elif mode == "transcript" or (over and mode == "auto" and captions_ok):
             use = transcript_watcher
         elif over:
             db.event("info", "watch", "Gemini 무료 등급 하루 시청 한도 도달 — 내일 이어서 시청 (Apify 키를 넣으면 자막으로 계속 분석)")
             break
         try:
             watch_video(v, use, counts_gemini_hours=use is not transcript_watcher)
+            if use is not transcript_watcher:
+                db.kv_set("gemini_watch_count:" + db.kst_day(), gemini_watches_today() + 1)
             count += 1
         except Exception as ex:
             msg = str(ex)[:300]
