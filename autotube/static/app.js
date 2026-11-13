@@ -138,10 +138,10 @@ async function imagePanel(id) {
   const d = await api(`/api/productions/${id}/images`);
   const empty = d.slots.filter(s => !s.file).length;
   box.innerHTML = `<h3>이미지 ${d.slots.length}장 넣기 <small class="hint">(남은 칸 ${empty})</small></h3>
-    <p class="hint">① [프롬프트 전체 복사] → ChatGPT에 붙여넣고 번호 순서대로 만들기 → ② 받은 이미지들을 아래 [여러 장 한 번에 넣기]로 선택
-    (다운로드한 순서대로 빈 칸에 채워짐) → ③ 칸을 눌러 한 장씩 바꿀 수도 있음 → ④ [이미지 넣었어요 → 계속]. 빈 칸은 무료 실제 자료·스톡 화면으로 채웁니다.</p>
+    <p class="hint">① [프롬프트 전체 복사] → ChatGPT에 붙여넣기 (순서대로 만들어서 zip으로 달라는 지시가 들어 있음) → ② ChatGPT가 준 <b>zip 파일을 그대로</b> 아래 [여러 장 한 번에 넣기]로 선택
+    (압축 풀 필요 없음, 00.png·01.png 번호대로 칸에 들어감. 이미지 여러 장을 직접 골라도 됨) → ③ 칸을 눌러 한 장씩 바꿀 수도 있음 → ④ [이미지 넣었어요 → 계속]. 빈 칸은 무료 실제 자료·스톡 화면으로 채웁니다.</p>
     <div class="row"><button id="ipCopy" class="primary">프롬프트 전체 복사</button>
-      <label class="inline">여러 장 한 번에 넣기 <input type="file" id="ipBulk" accept="image/*" multiple></label>
+      <label class="inline">여러 장 한 번에 넣기 (zip 가능) <input type="file" id="ipBulk" accept="image/*,.zip,application/zip" multiple></label>
       <button id="ipGo" class="primary">이미지 넣었어요 → 계속</button></div>
     <div class="slots">${d.slots.map(s => `<div class="slot" title="${esc(s.prompt)}"><b>${String(s.n).padStart(2, '0')}</b> <small>${esc(s.what || '')}</small><br>
       ${s.file ? `<img src="/media/${esc(id)}/my/${esc(s.file)}?t=${Date.now()}">` : '<div class="noimg">비어 있음</div>'}
@@ -150,7 +150,11 @@ async function imagePanel(id) {
   const send = async items => { await post(`/api/productions/${id}/images`, {items}); imagePanel(id) };
   const toItem = async (f, n) => ({n, b64: await readB64(f), ext: (f.name.split('.').pop() || 'png')});
   $('ipBulk').onchange = async e => {
-    const files = [...e.target.files].sort((a, b) => a.lastModified - b.lastModified || a.name.localeCompare(b.name, undefined, {numeric: true}));
+    const zips = [...e.target.files].filter(f => /\.zip$/i.test(f.name));
+    try { for (const z of zips) { const r = await post(`/api/productions/${id}/images/zip`, {b64: await readB64(z)}); alert(`zip에서 ${r.saved.length}장을 넣었습니다` + (r.skipped ? ` (칸이 모자라 ${r.skipped}장은 건너뜀)` : '')) } }
+    catch (err) { alert(err.message) }
+    if (zips.length) { imagePanel(id); if (zips.length === e.target.files.length) return }
+    const files = [...e.target.files].filter(f => !/\.zip$/i.test(f.name)).sort((a, b) => a.lastModified - b.lastModified || a.name.localeCompare(b.name, undefined, {numeric: true}));
     const named = files.filter(f => /^\d{1,3}\./.test(f.name));
     let items = [];
     if (named.length === files.length) items = await Promise.all(files.map(f => toItem(f, parseInt(f.name))));

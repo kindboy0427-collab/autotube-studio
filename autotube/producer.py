@@ -142,9 +142,16 @@ def image_slots(plan):
 
 
 def prompts_text(plan):
-    lines = ["아래 이미지들을 하나씩 만들어 주세요. 모두 16:9 가로, 글자·로고·워터마크 없이.",
-             "각 이미지는 번호 순서대로 만들고, 저장할 때 번호를 파일 이름으로 쓰면 편합니다 (예: 01.png).", ""]
-    for sl in image_slots(plan):
+    slots = image_slots(plan)
+    lines = [f"아래 이미지 {len(slots)}장을 순서대로 만들고, 순서대로 저장해서 zip 파일로 만들어 주세요.",
+             "",
+             "규칙:",
+             "1. 맨 위 번호부터 아래 번호까지 한 장씩 순서대로 만들 것. 중간에 멈추거나 건너뛰지 말고 끝까지.",
+             "2. 모두 16:9 가로, 글자·로고·워터마크 없이.",
+             "3. 각 이미지는 대괄호 안의 번호를 파일 이름으로 저장 (예: [00] → 00.png, [03] → 03.png). 번호가 띄엄띄엄이어도 그 번호 그대로.",
+             "4. 전부 다 만든 뒤, 저장한 이미지 파일들을 순서대로 하나의 zip 파일(images.zip)로 묶어서 다운로드 링크로 줄 것.",
+             ""]
+    for sl in slots:
         lines.append(f"[{sl['n']:02d}] {sl['what']}")
         lines.append(sl["prompt"])
         lines.append("")

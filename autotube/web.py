@@ -216,6 +216,50 @@ def upload_images(pid: str, body: ImageUpload):
     return {"saved": saved}
 
 
+class ZipUpload(BaseModel):
+    b64: str = Field(min_length=10)
+
+
+@app.post("/api/productions/{pid}/images/zip")
+def upload_images_zip(pid: str, body: ZipUpload):
+    """ZIP from ChatGPT (00.png, 01.png ...) -> fill the slots. Numbered files go to their slot,
+    unnumbered ones fill the empty slots in name order."""
+    import base64, io, zipfile
+    r = db.one("SELECT plan, output_dir FROM productions WHERE id=?", (pid,))
+    if not r or not r["plan"]:
+        raise HTTPException(404)
+    out = Path(r["output_dir"] or (config.OUTPUT / pid))
+    slot_ns = [sl["n"] for sl in producer.image_slots(json.loads(r["plan"]))]
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(base64.b64decode(body.b64.split(",", 1)[-1])))
+    except (zipfile.BadZipFile, ValueError):
+        raise HTTPException(400, "ZIP 파일을 열 수 없습니다")
+    members = [m for m in zf.infolist() if not m.is_dir() and not Path(m.filename).name.startswith(".")
+               and "__MACOSX" not in m.filename
+               and Path(m.filename).suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")
+               and m.file_size <= 25 * 1024 * 1024]
+    members.sort(key=lambda m: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", Path(m.filename).name.lower())])
+    numbered, rest = {}, []
+    for m in members:
+        hit = re.match(r"(\d{1,3})\D", Path(m.filename).name)
+        n = int(hit.group(1)) if hit else -1
+        if n in slot_ns and n not in numbered:
+            numbered[n] = m
+        else:
+            rest.append(m)
+    have = {sl for sl in slot_ns if producer.my_image(out, sl)}
+    free = [n for n in slot_ns if n not in numbered and n not in have]
+    plan_items = list(numbered.items()) + list(zip(free, rest))
+    items = [{"n": n, "ext": Path(m.filename).suffix.lstrip("."), "b64": base64.b64encode(zf.read(m)).decode()}
+             for n, m in plan_items]
+    if not items:
+        raise HTTPException(400, "ZIP 안에 넣을 이미지(png/jpg/webp)가 없습니다")
+    saved = []
+    for i in range(0, len(items), 20):
+        saved += upload_images(pid, ImageUpload(items=items[i:i + 20]))["saved"]
+    return {"saved": sorted(saved), "skipped": max(0, len(members) - len(items))}
+
+
 @app.post("/api/productions/{pid}/images/continue")
 def images_continue(pid: str):
     if not db.one("SELECT id FROM productions WHERE id=?", (pid,)):
