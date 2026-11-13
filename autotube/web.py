@@ -156,7 +156,8 @@ def status():
             "client_secret_present": youtube_upload.client_file().exists(),
             "ffmpeg": bool(shutil.which(config.ffmpeg_bin()) or Path(config.ffmpeg_bin()).exists()),
             "font": config.font_path(), "events": db.events(30), "subscriptions": subscription.status(),
-            "voices_mine": db.one("SELECT COUNT(*) c FROM voices")["c"], "align_available": align.available(),
+            "voices_mine": db.one("SELECT COUNT(*) c FROM voices")["c"],
+            "channels_count": db.one("SELECT COUNT(*) c FROM channels WHERE active=1")["c"], "align_available": align.available(),
             "formats": {k: v["name"] for k, v in planner.FORMATS.items()}}
 
 

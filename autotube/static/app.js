@@ -61,7 +61,7 @@ async function loadStatus() {
     [S.youtube_connected, 'YouTube 채널 연결 (비공개 자동 업로드)'],
     [S.ffmpeg, 'FFmpeg (영상 렌더링)'],
     [!!S.font, '한글 폰트 (자막·썸네일)'],
-    [(S.settings.learning.niches || []).length > 0, '학습 분야 설정 (설정 탭)'],
+    [S.channels_count > 0 || (S.settings.learning.niches || []).length > 0, '채널 만들기 (채널 탭 — 채널 분야로 AI가 학습할 영상을 찾음)'],
   ];
   $('checklist').innerHTML = items.map(([ok, t]) => `<li class="${ok ? 'ok' : 'no'}">${esc(t)}</li>`).join('');
   $('events').innerHTML = S.events.map(e => `<div class="${e.level}">${esc(e.created_at.slice(5, 16).replace('T', ' '))} · ${esc(e.message)}</div>`).join('') || '아직 활동 없음';
