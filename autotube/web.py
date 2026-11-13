@@ -326,6 +326,41 @@ def add_video(body: AddVideo):
     return {"ok": True, "title": v["title"]}
 
 
+class StudyReq(BaseModel):
+    url: str = Field(min_length=3, max_length=300)
+    channel_id: str = Field(default="", max_length=40)
+    favorite: bool = False
+    max_videos: int = Field(default=200, ge=20, le=500)
+
+
+STUDY_STATE = {"running": None, "message": ""}
+
+
+@app.post("/api/study")
+def study_channel(body: StudyReq):
+    from . import channel_study
+    if STUDY_STATE["running"]:
+        raise HTTPException(409, "다른 채널을 학습하는 중입니다. 잠시 후 다시 시도하세요")
+
+    def job():
+        STUDY_STATE.update(running=body.url, message="채널 영상 목록을 읽는 중…")
+        try:
+            r = channel_study.study(body.url, body.channel_id, body.max_videos, favorite=body.favorite)
+            STUDY_STATE["message"] = f"완료: {r['channel']['title']} — 롱폼 {r['studied']}편 비교, {r['queued']}편 정밀 분석 대기"
+        except Exception as ex:
+            STUDY_STATE["message"] = "실패: " + str(ex)[:300]
+        finally:
+            STUDY_STATE["running"] = None
+    threading.Thread(target=job, daemon=True).start()
+    return {"ok": True}
+
+
+@app.get("/api/study")
+def list_studies():
+    from . import channel_study
+    return {"studies": channel_study.all_studies(), **STUDY_STATE}
+
+
 @app.post("/api/settings")
 async def save_settings(request: Request):
     patch = await request.json()

@@ -43,6 +43,9 @@ PLAN_PROMPT = """[주제/명령]
 희망 → 요약 → 열린 질문으로 끝내고 채널 고정 끝인사 / 짧은 문장, 핵심 문장 뒤에는 쉼(pause_after) /
 사례·챕터가 바뀔 때 앞뒤를 잇는 연결 문장.
 
+[통째로 학습한 참고 채널들의 분석 — 원리만 응용, 제목·대사 복제 금지]
+{studies}
+
 [이 채널의 제작 규칙(스타일 가이드) — 반드시 지킬 것]
 {style_guide}
 
@@ -154,6 +157,15 @@ def _recent_titles():
             db.rows("SELECT topic, plan FROM productions WHERE plan IS NOT NULL ORDER BY created_at DESC LIMIT 8")]
 
 
+def _studies(cid):
+    try:
+        from . import channel_study
+        notes = channel_study.guidance_for(cid)
+    except Exception:
+        notes = []
+    return json.dumps(notes, ensure_ascii=False)[:4000] if notes else "(아직 없음)"
+
+
 def build_prompt(topic, instructions, minutes, features, channel=None, script_format="auto"):
     s = config.load_settings()["production"]
     cps = s["chars_per_second"]
@@ -167,6 +179,7 @@ def build_prompt(topic, instructions, minutes, features, channel=None, script_fo
         ch_text = json.dumps({k: channel.get(k) for k in ("name", "niches", "audience", "tone")}, ensure_ascii=False)
     return PLAN_PROMPT.format(
         topic=topic, channel=ch_text, format_block=format_block(script_format),
+        studies=_studies((channel or {}).get("id")),
         style_guide=(channel or {}).get("style_guide") or "(아직 없음)", instructions=("[추가 지시]\n" + instructions) if instructions else "", minutes=minutes,
         chars_min=int(total * cps * 0.85), chars_max=int(total * cps * 1.1),
         scenes_min=int(total / 10), scenes_max=int(total / 6),

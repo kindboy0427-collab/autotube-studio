@@ -126,7 +126,27 @@ async function showDetail(id, quiet) {
 
 const featLabel = f => { const [c, v] = f.split(':'); return (FEAT[c] || c) + ': ' + v };
 
+async function loadStudies() {
+  const d = await api('/api/study');
+  $('stMsg').textContent = d.running ? '학습 중… ' + d.message : (d.message || '');
+  $('stList').innerHTML = d.studies.map(x => { const r = x.report || {}; return `<div class="chcard"><b>${esc(x.channel.title)}</b>
+    <small class="hint">구독자 ${x.channel.subscribers ? x.channel.subscribers.toLocaleString() : '비공개'} · 롱폼 ${x.studied}편 비교 · 평소 조회 ${x.median_views.toLocaleString()} · 정밀 분석 ${x.queued}편${x.favorite ? ' · 취향 레퍼런스' : ''}</small>
+    <div>${esc(r.one_line || '')}</div>
+    ${(r.title_patterns || []).length ? `<small class="hint">터진 제목 패턴: ${esc(r.title_patterns.join(' / '))}</small><br>` : ''}
+    ${(r.borrow || []).length ? `<small class="hint">가져올 원리: ${esc(r.borrow.join(' / '))}</small><br>` : ''}
+    ${(r.gaps || []).length ? `<small class="hint">빈자리 주제: ${esc(r.gaps.join(' / '))}</small><br>` : ''}
+    <details><summary>터진 영상 TOP 10</summary>${(x.top || []).map(t => `<div><a href="https://youtu.be/${esc(t.id)}" target="_blank">${esc(t.title)}</a> <small class="hint">평소의 ${t.ratio}배 · ${(t.views || 0).toLocaleString()}회</small></div>`).join('')}</details></div>` }).join('');
+  if (d.running) setTimeout(loadStudies, 4000);
+}
+$('btnStudy').onclick = async () => {
+  const url = $('stUrl').value.trim(); if (!url) return;
+  try { await post('/api/study', {url, channel_id: $('stCh').value, favorite: $('stFav').checked}); $('stUrl').value = ''; loadStudies() }
+  catch (e) { $('stMsg').textContent = e.message }
+};
+
 async function loadLearn() {
+  api('/api/channels').then(d => { $('stCh').innerHTML = '<option value="">(모든 채널 공통)</option>' + d.channels.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('') });
+  loadStudies();
   const L = await api('/api/learning'), pb = L.playbook;
   $('pbMeta').textContent = `분석 영상 ${pb.watched_videos}편 · 내 영상 성과 반영 ${pb.own_videos_measured}편 · 표본 3편 이상 패턴만 표시`;
   const block = (o, neg) => Object.entries(o).filter(([, v]) => v.length).map(([c, v]) =>

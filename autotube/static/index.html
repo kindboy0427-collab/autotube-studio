@@ -140,6 +140,14 @@
         <label>분석할 영상 직접 추가 (유튜브 주소)</label>
         <div class="row"><input id="addUrl" class="grow" placeholder="https://www.youtube.com/watch?v=..."><label class="inline"><input type="checkbox" id="addFav"> 내 취향 레퍼런스</label><button id="btnAdd">추가</button></div>
         <div id="learnMsg" class="hint"></div>
+        <h3>채널 통째로 학습</h3>
+        <p class="hint">채널 주소(@이름)를 넣으면 그 채널의 롱폼 영상 전체를 <b>그 채널 평소 조회수와 비교</b>해서, 그 시청자에게 터진 제목·주제·길이를 정리하고 터진 영상들은 정밀 분석합니다.</p>
+        <div class="row"><input id="stUrl" class="grow" placeholder="https://www.youtube.com/@채널이름"></div>
+        <div class="row"><div class="grow"><label>어느 내 채널에 반영할까요</label><select id="stCh"></select></div>
+          <label class="inline"><input type="checkbox" id="stFav"> 내 취향 레퍼런스로</label>
+          <button id="btnStudy" class="primary">채널 학습 시작</button></div>
+        <div id="stMsg" class="hint"></div>
+        <div id="stList"></div>
         <h3>최근 시청·분석</h3><div id="recent"></div>
       </div>
     </div>

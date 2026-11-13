@@ -110,7 +110,7 @@ DEFAULTS = {
     "web_port": 8770,
 }
 
-QUOTA_COST = {"search": 100, "videos": 1, "channels": 1, "comments": 1, "upload": 100,
+QUOTA_COST = {"search": 100, "videos": 1, "channels": 1, "playlist": 1, "comments": 1, "upload": 100,
               "captions": 400, "thumbnail": 50, "update": 50}
 
 
