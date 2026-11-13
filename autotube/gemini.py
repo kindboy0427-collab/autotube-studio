@@ -70,15 +70,16 @@ def generate_text(prompt: str, system: str = "", model: str | None = None, produ
     body = {"model": model, "input": prompt}
     if system:
         body["system_instruction"] = system
-    budget.check(0.05, production_id)
-    res = http.post_json(BASE + "/interactions", body, headers=_headers(), timeout=600)
+    learning = production_id is None and free_key_set()  # learning/radar work -> free key, production -> paid key
+    budget.check(0.0 if learning else 0.05, production_id)
+    res = http.post_json(BASE + "/interactions", body, headers=_learning_headers() if learning else _headers(), timeout=600)
     text = _texts_from_interaction(res)
     if not text.strip():
         raise GeminiError("빈 응답")
     p = s["prices"]
     tin, tout = _usage_tokens(res, len(prompt) // 2, len(text) // 2)
-    budget.record(service, tin + tout, tin / 1e6 * p["gemini_text_per_mtok_in"] + tout / 1e6 * p["gemini_text_per_mtok_out"],
-                  model, production_id)
+    cost = 0.0 if learning else tin / 1e6 * p["gemini_text_per_mtok_in"] + tout / 1e6 * p["gemini_text_per_mtok_out"]
+    budget.record(service + ("_free" if learning else ""), tin + tout, cost, model, production_id)
     return text
 
 
