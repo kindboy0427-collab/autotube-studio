@@ -346,13 +346,25 @@ def study_channel(body: StudyReq):
         STUDY_STATE.update(running=body.url, message="채널 영상 목록을 읽는 중…")
         try:
             r = channel_study.study(body.url, body.channel_id, body.max_videos, favorite=body.favorite)
-            STUDY_STATE["message"] = f"완료: {r['channel']['title']} — 롱폼 {r['studied']}편 비교, {r['queued']}편 정밀 분석 대기"
+            STUDY_STATE["message"] = f"{r['channel']['title']} 분석 완료 → 여러 채널 종합해서 빈자리 주제 만드는 중…"
+            channel_study.synthesize(body.channel_id)
+            STUDY_STATE["message"] = (f"완료: {r['channel']['title']} — 롱폼 {r['studied']}편 비교, {r['queued']}편 정밀 분석 대기, "
+                                      "종합 분석·빈자리 주제 갱신 (채널 탭에서 확인)")
         except Exception as ex:
             STUDY_STATE["message"] = "실패: " + str(ex)[:300]
         finally:
             STUDY_STATE["running"] = None
     threading.Thread(target=job, daemon=True).start()
     return {"ok": True}
+
+
+@app.post("/api/channels/{cid}/synth")
+def channel_synth(cid: str):
+    from . import channel_study
+    try:
+        return channel_study.synthesize("" if cid == "_all" else cid)
+    except ValueError as ex:
+        raise HTTPException(400, str(ex))
 
 
 @app.get("/api/study")
@@ -447,6 +459,8 @@ def list_channels():
         c["videos"] = db.one("SELECT COUNT(*) n FROM productions WHERE channel_id=?", (c["id"],))["n"]
         c["watched"] = db.one("SELECT COUNT(*) n FROM videos WHERE niche=? AND status='watched'", (c["id"],))["n"]
         c["radar"] = db.kv_get("radar:" + c["id"])
+        from . import channel_study
+        c["synth"] = channel_study.get_synth(c["id"])
         out.append(c)
     return {"channels": out, "presets": channels.PRESETS}
 

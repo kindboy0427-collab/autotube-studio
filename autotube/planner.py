@@ -161,9 +161,17 @@ def _studies(cid):
     try:
         from . import channel_study
         notes = channel_study.guidance_for(cid)
+        synth = channel_study.get_synth(cid)
     except Exception:
-        notes = []
-    return json.dumps(notes, ensure_ascii=False)[:4000] if notes else "(아직 없음)"
+        notes, synth = [], None
+    if not notes and not synth:
+        return "(아직 없음)"
+    block = {}
+    if synth:
+        block["종합(여러 채널 공통)"] = {"느낌": synth.get("feel"), "잘된것": synth.get("works"), "안된것": synth.get("fails")}
+    if notes:
+        block["채널별"] = notes
+    return json.dumps(block, ensure_ascii=False)[:5000]
 
 
 def build_prompt(topic, instructions, minutes, features, channel=None, script_format="auto"):

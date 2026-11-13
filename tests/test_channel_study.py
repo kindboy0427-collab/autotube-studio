@@ -44,9 +44,34 @@ class Study(TempHome):
         q = db.rows("SELECT * FROM videos WHERE query LIKE 'channel:%'")
         self.assertEqual(len(q), 7)
         self.assertTrue(all(v["niche"] == "tech" for v in q))
-        notes = json.loads(planner._studies("tech"))
+        notes = json.loads(planner._studies("tech"))["채널별"]
         self.assertEqual(notes[0]["why"], "질문형 제목이 터짐")
         self.assertEqual(planner._studies("other"), "(아직 없음)")
 
     def test_resolve_formats(self):
         self.assertEqual(channel_study.resolve("https://www.youtube.com/channel/UC" + "b" * 22), "UC" + "b" * 22)
+
+
+class Synth(TempHome):
+    def test_synthesize_blends_studies_into_gap_topics(self):
+        config.set_secrets({"YOUTUBE_API_KEY": "y"})
+        with patch("autotube.http.get_json", side_effect=yt_fake):
+            channel_study.study("@a", "", queue_top=2, queue_bottom=0,
+                                generate=lambda p: {"one_line": "반전", "borrow": ["반례"], "gaps": ["양자"]})
+        sent = {}
+
+        def gen(prompt):
+            sent["p"] = prompt
+            return {"feel": "차분한 반전 에세이", "works": ["질문형 제목"], "fails": ["목록 나열"],
+                    "gap_topics": [{"topic": "반도체 공장은 왜 사막에?", "why_gap": "아무도 안 다룸", "evidence": ["과학채널 터진 영상"],
+                                    "format": "reversal_essay"}, {"topic": "형식 틀림", "format": "zzz"}]}
+        out = channel_study.synthesize("", generate=gen)
+        self.assertIn("과학채널", sent["p"])
+        self.assertEqual(out["gap_topics"][0]["format"], "reversal_essay")
+        self.assertEqual(out["gap_topics"][1]["format"], "")
+        self.assertEqual(channel_study.get_synth("tech")["feel"], "차분한 반전 에세이")  # falls back to the common synthesis
+        self.assertIn("잘된것", planner._studies("tech"))
+
+    def test_synthesize_needs_studies(self):
+        with self.assertRaises(ValueError):
+            channel_study.synthesize("", generate=lambda p: {})

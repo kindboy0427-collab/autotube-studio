@@ -225,13 +225,26 @@ async function loadChannels() {
     ${c.yt_channel ? `<span class="hint">→ 업로드 채널: ${c.yt_channel.url ? `<a href="${esc(c.yt_channel.url)}" target="_blank"><b>${esc(c.yt_channel.title)}</b></a>` : esc(c.yt_channel.title)}</span>` : ''}<br>
     <small class="hint">분야: ${esc(c.niches.join(', '))} · 학습한 영상 ${c.watched} · 제작 ${c.videos} · 목표 월 ${c.monthly_videos}편</small>
     <div class="row" style="margin-top:8px"><button data-edit="${esc(c.id)}">설정·제작 규칙</button><button data-conn="${esc(c.id)}">YouTube 연결</button>
-    <button data-radar="${esc(c.id)}">최신 영상 검색</button><button data-sug="${esc(c.id)}" class="primary">지금 뜰 주제 추천</button></div>
+    <button data-radar="${esc(c.id)}">최신 영상 검색</button><button data-sug="${esc(c.id)}" class="primary">지금 뜰 주제 추천</button>
+    <button data-syn="${esc(c.id)}" class="primary">참고 채널 종합 → 빈자리 주제</button></div>
+    <div>${synthHtml(c.id, c.synth)}</div>
     <div id="rad-${esc(c.id)}">${radarHtml(c.id, c.radar)}</div></div>`).join('') || '<p class="hint">위 버튼으로 과학·교육 분야 채널을 추가하세요.</p>';
   document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editChannel(CH.find(c => c.id === b.dataset.edit)));
   document.querySelectorAll('[data-conn]').forEach(b => b.onclick = async () => { try { alert((await post('/api/youtube/connect?channel_id=' + b.dataset.conn)).message) } catch (e) { alert(e.message) } });
   document.querySelectorAll('[data-radar]').forEach(b => b.onclick = async () => { b.disabled = true; try { const r = await post(`/api/channels/${b.dataset.radar}/radar/refresh`); alert(`최근 2주 영상 ${r.added}개를 찾았습니다 (검색 할당량 사용)`) } catch (e) { alert(e.message) } b.disabled = false });
   document.querySelectorAll('[data-sug]').forEach(b => b.onclick = async () => { b.disabled = true; try { const r = await post(`/api/channels/${b.dataset.sug}/radar/suggest`); if (r.message) alert(r.message); loadChannels() } catch (e) { alert(e.message) } b.disabled = false });
-  document.querySelectorAll('[data-use]').forEach(b => b.onclick = () => { $('topic').value = b.dataset.use; $('makeChannel').value = b.dataset.ch; document.querySelector('[data-tab=make]').click() });
+  document.querySelectorAll('[data-syn]').forEach(b => b.onclick = async () => { b.disabled = true; b.textContent = '종합 분석 중… (1~2분)'; try { await post(`/api/channels/${b.dataset.syn}/synth`); loadChannels() } catch (e) { alert(e.message); b.disabled = false; b.textContent = '참고 채널 종합 → 빈자리 주제' } });
+  document.querySelectorAll('[data-use]').forEach(b => b.onclick = () => { $('topic').value = b.dataset.use; $('makeChannel').value = b.dataset.ch; if (b.dataset.fmt) $('makeFormat').value = b.dataset.fmt; document.querySelector('[data-tab=make]').click() });
+}
+function synthHtml(cid, x) {
+  if (!x) return '';
+  const li = a => (a || []).map(t => `<div>· ${esc(t)}</div>`).join('');
+  return `<details open><summary><b>참고 채널 종합 분석</b> <small class="hint">(${esc((x.based_on || []).join(', '))} · ${esc((x.at || '').slice(0, 16).replace('T', ' '))})</small></summary>
+    ${x.feel ? `<p class="hint">${esc(x.feel)}</p>` : ''}
+    <div class="cols"><div><h4>잘 된 것</h4>${li(x.works)}</div><div><h4>안 된 것</h4>${li(x.fails)}</div></div>
+    <h4>빈자리 주제</h4>${(x.gap_topics || []).map(g => `<div class="idea"><b>${esc(g.topic)}</b><br>
+      <small class="hint">왜 빈자리: ${esc(g.why_gap || '')}${(g.evidence || []).length ? ' · 근거: ' + esc(g.evidence.join(' / ')) : ''}</small><br>
+      <button data-use="${esc(g.topic)}" data-ch="${esc(cid)}" data-fmt="${esc(g.format || '')}">이 주제로 만들기</button></div>`).join('')}</details>`;
 }
 function radarHtml(cid, r) {
   if (!r || !r.ideas || !r.ideas.length) return '';

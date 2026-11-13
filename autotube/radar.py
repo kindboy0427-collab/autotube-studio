@@ -16,6 +16,7 @@ PROMPT = """너는 과학·교육 유튜브 채널의 기획 PD다. 아래는 �
 '구독자에 비해 조회수가 유난히 높은' 영상들이다(= 사람들은 보고 싶은데 만드는 채널이 적은 주제).
 [채널] {channel}
 [신호 영상] {signals}
+[참고 채널 종합 분석 — 잘된 것 / 안된 것 / 빈자리] {synth}
 이 채널이 지금 만들면 좋을 영상 주제 5개를 제안하라. 원본 제목·구성을 베끼지 말고 같은 관심을 다른 각도로 풀 것.
 과학적으로 정확하게 다룰 수 있는 주제만. JSON만 출력:
 {{"ideas":[{{"topic":"영상 주제(명령으로 바로 쓸 수 있게)","why_now":"왜 지금인지","entry_emotion":"클릭할 때 감정",
@@ -72,12 +73,16 @@ def suggest(channel_id, generate=None, days=14):
     if not ch:
         raise KeyError(channel_id)
     sig = signals(channel_id, days)
-    if not sig:
-        return {"ideas": [], "signals": [], "message": "최근 신호 영상이 없습니다. [최신 영상 검색]을 먼저 실행하세요."}
+    from . import channel_study
+    synth = channel_study.get_synth(channel_id)
+    if not sig and not synth:
+        return {"ideas": [], "signals": [], "message": "최근 신호 영상이 없습니다. [최신 영상 검색]이나 '채널 통째로 학습'을 먼저 실행하세요."}
     generate = generate or (lambda prompt: llm.generate_json(prompt, "과학 유튜브 기획 PD", max_tokens=4000))
     res = generate(PROMPT.format(days=days, channel=json.dumps({k: ch[k] for k in ("name", "niches", "audience", "tone")},
                                                                  ensure_ascii=False),
-                                 signals=json.dumps(sig, ensure_ascii=False)[:9000]))
+                                 signals=json.dumps(sig, ensure_ascii=False)[:9000] if sig else "(없음)",
+                                 synth=json.dumps({k: (synth or {}).get(k) for k in ("works", "fails", "gap_topics")},
+                                                  ensure_ascii=False)[:5000] if synth else "(없음)"))
     if isinstance(res, str):
         res = http.parse_json_loose(res)
     valid = {s["id"] for s in sig}

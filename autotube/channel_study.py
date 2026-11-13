@@ -182,3 +182,72 @@ def guidance_for(app_channel_id, limit=3):
         if len(notes) >= limit:
             break
     return notes
+
+
+SYNTH_PROMPT = """너는 과학·교육 유튜브 총괄 PD다. 여러 참고 채널을 통째로 분석한 결과와, 분야 전체에서 '작은 채널인데 터진' 신호 영상,
+그리고 우리 채널이 지금까지 학습한 성과 패턴을 종합해서 전략을 세워라.
+목표: 참고 채널들과 '비슷한 느낌'(톤·구성·속도)은 살리되, 어느 한 채널의 복제가 아니라 공통 원리만 섞고,
+잘 되는 것과 안 되는 것을 분리한 뒤, 그 데이터로 '아직 아무도 제대로 안 다룬 빈자리 주제'를 만든다.
+
+[우리 채널] {channel}
+[참고 채널 분석들]
+{studies}
+[분야 신호 영상 — 구독자 대비 조회수 높음]
+{signals}
+[우리가 학습한 성과 패턴 (do / avoid)]
+{playbook}
+[이미 만든 우리 영상 — 겹치지 않게]
+{recent}
+
+규칙: 참고 채널 영상과 같은 주제·제목은 빈자리가 아니다. 근거(evidence)는 위 데이터에 있는 것만 적는다. 과학적으로 정확히 다룰 수 있는 주제만.
+JSON으로만 답하라:
+{{"feel": "참고 채널들의 공통된 느낌을 우리 채널에 옮기는 방법 (톤·구성·속도·화면) 3~4문장",
+ "works": ["여러 채널에서 공통으로 잘 된 요소 4~8개 (데이터 근거 포함)"],
+ "fails": ["공통으로 안 된 요소 3~6개"],
+ "gap_topics": [{{"topic": "영상 주제 (명령으로 바로 쓸 수 있게)", "why_gap": "왜 빈자리인지",
+   "evidence": ["근거 1~3개"], "format": "reversal_essay|catalog|staged_scenario|metaphor_doc|explainer",
+   "entry_emotion": "", "exit_emotion": ""}}]}}  (gap_topics는 8개)"""
+
+
+def synthesize(app_channel_id="", generate=None):
+    """Blend every studied channel + field signals + our own playbook -> works / fails / gap topics."""
+    from . import channels, learner, llm, radar
+    studies = [s for s in all_studies() if not app_channel_id or s.get("app_channel_id") in (app_channel_id, "")]
+    if not studies:
+        raise ValueError("먼저 참고 채널을 1개 이상 '채널 통째로 학습' 하세요")
+    ch = channels.get(app_channel_id) if app_channel_id else None
+    slim = [{"channel": s["channel"]["title"], "subscribers": s["channel"].get("subscribers"), "median_views": s["median_views"],
+             "report": s.get("report"), "top": [f"{t['title']} ({t['ratio']}배)" for t in (s.get("top") or [])[:8]]}
+            for s in studies[:8]]
+    sig = radar.signals(app_channel_id, days=60, limit=15) if app_channel_id else []
+    pb = learner.playbook()
+    short_pb = {"do": {k: [x["feature"] for x in v] for k, v in pb["do"].items()},
+                "avoid": {k: [x["feature"] for x in v] for k, v in pb["avoid"].items()}}
+    recent = [r["topic"] for r in db.rows("SELECT topic FROM productions WHERE (channel_id=? OR ?='') ORDER BY created_at DESC LIMIT 15",
+                                          (app_channel_id, app_channel_id))]
+    generate = generate or (lambda p: llm.generate_json(p, "과학 유튜브 총괄 PD", max_tokens=6000))
+    res = generate(SYNTH_PROMPT.format(
+        channel=json.dumps({k: (ch or {}).get(k) for k in ("name", "niches", "audience", "tone")}, ensure_ascii=False) if ch else "(모든 채널 공통)",
+        studies=json.dumps(slim, ensure_ascii=False)[:14000], signals=json.dumps(
+            [{"title": x["title"], "channel": x["channel_title"], "subs": x["subscribers"], "views": x["views"]} for x in sig],
+            ensure_ascii=False)[:4000] if sig else "(없음)",
+        playbook=json.dumps(short_pb, ensure_ascii=False)[:3000], recent=json.dumps(recent, ensure_ascii=False)))
+    if isinstance(res, str):
+        res = http.parse_json_loose(res)
+    res = res if isinstance(res, dict) else {}
+    from . import planner
+    gaps = []
+    for g in (res.get("gap_topics") or [])[:10]:
+        if isinstance(g, dict) and g.get("topic"):
+            if g.get("format") not in planner.FORMATS:
+                g["format"] = ""
+            gaps.append(g)
+    out = {"at": db.now(), "app_channel_id": app_channel_id, "based_on": [s["channel"]["title"] for s in studies[:8]],
+           "feel": res.get("feel", ""), "works": res.get("works") or [], "fails": res.get("fails") or [], "gap_topics": gaps}
+    db.kv_set("synth:" + (app_channel_id or "_all"), out)
+    db.event("info", "study", f"종합 분석 완료 ({', '.join(out['based_on'])}) → 빈자리 주제 {len(gaps)}개")
+    return out
+
+
+def get_synth(app_channel_id=""):
+    return db.kv_get("synth:" + (app_channel_id or "_all")) or (db.kv_get("synth:_all") if app_channel_id else None)
