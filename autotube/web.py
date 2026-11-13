@@ -357,6 +357,7 @@ def list_channels():
     out = []
     for c in channels.all_channels():
         c["connected"] = youtube_upload.connected(c["id"])
+        c["yt_channel"] = youtube_upload.channel_info(c["id"]) if c["connected"] else None
         c["videos"] = db.one("SELECT COUNT(*) n FROM productions WHERE channel_id=?", (c["id"],))["n"]
         c["watched"] = db.one("SELECT COUNT(*) n FROM videos WHERE niche=? AND status='watched'", (c["id"],))["n"]
         c["radar"] = db.kv_get("radar:" + c["id"])
@@ -449,6 +450,15 @@ class VoiceManual(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     engine: str = Field(pattern="^(gemini|elevenlabs)$")
     ref: str = Field(min_length=2, max_length=120)
+
+
+@app.get("/api/voices/remote")
+def remote_voices():
+    """Voices already stored in your Gemini project (e.g. made in AI Studio) -> import with one click."""
+    try:
+        return {"voices": voices.list_gemini_remote()}
+    except Exception as ex:
+        raise HTTPException(400, str(ex)[:400])
 
 
 @app.post("/api/voices/manual")

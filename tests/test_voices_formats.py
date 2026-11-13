@@ -213,3 +213,30 @@ class CustomVoiceChunks(TempHome):
     def test_split_merges_tiny_pieces(self):
         self.assertEqual(tts.split_sentences("네. 오늘은 블랙홀 이야기를 합니다. 시작할까요?"),
                          ["네. 오늘은 블랙홀 이야기를 합니다.", "시작할까요?"])
+
+
+class RemoteVoices(TempHome):
+    def test_lists_and_marks_imported(self):
+        config.set_secrets({"GEMINI_API_KEY": "g"})
+        voices.add_manual("old", "gemini", "voice_old")
+
+        def fake(url, headers=None, params=None, **kw):
+            if params["type"] == "replicated":
+                return {"voices": [{"id": "voice_me", "display_name": "Kim"}, {"id": "voice_old", "display_name": "old"}]}
+            return {"voices": [{"name": "voices/voice_doc", "displayName": "다큐 톤"}]}
+        with patch("autotube.http.get_json", side_effect=fake):
+            r = {v["ref"]: v for v in voices.list_gemini_remote()}
+        self.assertEqual(r["voice_me"]["name"], "Kim")
+        self.assertTrue(r["voice_old"]["imported"])
+        self.assertIn("voice_doc", r)
+
+    def test_register_error_shows_google_message(self):
+        from autotube import http
+        config.set_secrets({"GEMINI_API_KEY": "g"})
+        src = make_wav(Path(self.tmp) / "s.wav", 20)
+        con = make_wav(Path(self.tmp) / "c.wav", 6)
+        err = http.HttpError(400, "Bad Request", '{"error":{"message":"Consent phrase does not match"}}')
+        with patch("autotube.http.post_json", side_effect=err):
+            with self.assertRaises(voices.VoiceError) as cm:
+                voices.register_gemini("me", src, con)
+        self.assertIn("Consent phrase does not match", str(cm.exception))

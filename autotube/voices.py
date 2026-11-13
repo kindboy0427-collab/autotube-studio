@@ -105,12 +105,48 @@ def register_gemini(name, source_path, consent_path):
     try:
         res = http.post_json(tts.GEMINI_BASE + "/voices", body, headers={"x-goog-api-key": key}, timeout=300, retries=0)
     except http.HttpError as ex:
-        raise VoiceError(f"Gemini 등록 실패 (HTTP {ex.args[0] if ex.args else ''}): 동의 문장을 정확히 읽었는지, "
-                         "두 녹음이 같은 사람·같은 마이크인지 확인하세요. " + str(ex)[:300]) from ex
+        detail = _google_error(ex)
+        raise VoiceError(f"Gemini 등록 실패 ({ex.status}): {detail} — 동의 문장을 정확히 읽었는지, "
+                         "두 녹음이 같은 사람·같은 마이크인지 확인하세요.") from ex
     ref = res.get("id") or res.get("name", "").split("/")[-1] or (res.get("voice") or {}).get("id")
     if not ref:
         raise VoiceError("Gemini가 목소리 ID를 돌려주지 않았습니다: " + json.dumps(res)[:200])
     return _add(name, "gemini", ref, "clone", "Gemini 음성 복제 (1년 보관)")
+
+
+def _google_error(ex):
+    try:
+        e = json.loads(getattr(ex, "body", "") or "{}").get("error", {})
+        return (e.get("message") or str(ex))[:400]
+    except ValueError:
+        return (getattr(ex, "body", "") or str(ex))[:400]
+
+
+def list_gemini_remote():
+    """GET /v1beta/voices — replicated + designed voices stored in this API key's project."""
+    key = config.get_secret("GEMINI_API_KEY")
+    if not key:
+        raise VoiceError("Gemini API 키가 필요합니다")
+    out, seen = [], {r["ref"] for r in db.rows("SELECT ref FROM voices")}
+    for typ in ("replicated", "prompted"):
+        try:
+            res = http.get_json(tts.GEMINI_BASE + "/voices", headers={"x-goog-api-key": key},
+                                params={"type": typ, "pageSize": 100}, retries=1)
+        except http.HttpError as ex:
+            if typ == "replicated":
+                raise VoiceError("Gemini 목소리 목록을 못 가져왔습니다: " + _google_error(ex)) from ex
+            continue
+        for v in res.get("voices") or res.get("items") or []:
+            ref = v.get("id") or str(v.get("name", "")).split("/")[-1]
+            if not ref or not ref.startswith(("voice_", "voicekey_")):
+                continue
+            out.append({"ref": ref, "name": v.get("display_name") or v.get("displayName") or ref,
+                        "type": v.get("type") or typ, "created": v.get("create_time") or v.get("createTime") or "",
+                        "imported": ref in seen})
+    uniq = {}
+    for v in out:
+        uniq.setdefault(v["ref"], v)
+    return list(uniq.values())
 
 
 def _multipart(fields, files):

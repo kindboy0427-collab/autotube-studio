@@ -199,7 +199,8 @@ async function loadChannels() {
   document.querySelectorAll('[data-preset]').forEach(b => b.onclick = async () => { await post('/api/channels', {preset: b.dataset.preset}); loadChannels() });
   $('chNew').onclick = () => editChannel({id: '', name: '', niches: [], audience: '', tone: '', voice_id: '', target_minutes: 10, monthly_videos: 8, style_guide: '', active: 1});
   $('chList').innerHTML = CH.map(c => `<div class="chcard"><b>${esc(c.name)}</b> <span class="badge">${c.active ? '운영' : '중지'}</span>
-    <span class="badge ${c.connected ? 'ready' : ''}">${c.connected ? 'YouTube 연결됨' : 'YouTube 미연결'}</span><br>
+    <span class="badge ${c.connected ? 'ready' : ''}">${c.connected ? 'YouTube 연결됨' : 'YouTube 미연결'}</span>
+    ${c.yt_channel ? `<span class="hint">→ 업로드 채널: ${c.yt_channel.url ? `<a href="${esc(c.yt_channel.url)}" target="_blank"><b>${esc(c.yt_channel.title)}</b></a>` : esc(c.yt_channel.title)}</span>` : ''}<br>
     <small class="hint">분야: ${esc(c.niches.join(', '))} · 학습한 영상 ${c.watched} · 제작 ${c.videos} · 목표 월 ${c.monthly_videos}편</small>
     <div class="row" style="margin-top:8px"><button data-edit="${esc(c.id)}">설정·제작 규칙</button><button data-conn="${esc(c.id)}">YouTube 연결</button>
     <button data-radar="${esc(c.id)}">최신 영상 검색</button><button data-sug="${esc(c.id)}" class="primary">지금 뜰 주제 추천</button></div>
@@ -331,4 +332,19 @@ $('btnQuit').onclick = async () => {
   if (!confirm('프로그램을 완전히 끌까요? (AI 학습·제작이 멈춥니다. 창만 닫으면 백그라운드에서 계속 학습합니다)')) return;
   try { await post('/api/shutdown') } catch {}
   document.body.innerHTML = '<p style="padding:40px;font-size:18px">AutoTube Studio를 종료했습니다. 이 창을 닫으세요. 다시 시작하려면 바탕화면의 AutoTube Studio 아이콘을 누르세요.</p>';
+};
+
+$('vRemote').onclick = async () => {
+  $('vRemoteList').innerHTML = '<p class="hint">불러오는 중…</p>';
+  try {
+    const r = await api('/api/voices/remote');
+    $('vRemoteList').innerHTML = r.voices.length ? r.voices.map((v, i) => `<div class="chcard"><b>${esc(v.name)}</b>
+      <small class="hint">${esc(v.type)} · ${esc(v.ref)} ${v.created ? '· ' + esc(v.created.slice(0, 10)) : ''}</small>
+      ${v.imported ? '<span class="badge ready">가져옴</span>' : `<button data-imp="${i}">이 목소리 가져오기</button>`}</div>`).join('')
+      : '<p class="hint">이 키의 프로젝트에 저장된 목소리가 없습니다. 다른 프로젝트에서 만들었다면 AI Studio에서 voice_… ID를 복사해 아래 "직접 넣기"에 붙여넣으세요.</p>';
+    document.querySelectorAll('[data-imp]').forEach(b => b.onclick = async () => {
+      const v = r.voices[+b.dataset.imp];
+      await post('/api/voices/manual', {name: v.name, engine: 'gemini', ref: v.ref}); loadVoices(); $('vRemote').click();
+    });
+  } catch (e) { $('vRemoteList').innerHTML = `<div class="msg err">${esc(e.message)}</div>` }
 };

@@ -32,6 +32,15 @@ def connected(channel_id=None):
 
 
 def authorize(channel_id=None):
+    try:
+        from . import db
+        db.execute("DELETE FROM kv WHERE key=?", ("ytchannel:" + (channel_id or ""),))
+    except Exception:
+        pass
+    return _authorize(channel_id)
+
+
+def _authorize(channel_id=None):
     from google_auth_oauthlib.flow import InstalledAppFlow
     if not client_file().exists():
         raise UploadError("data/client_secret.json 이 없습니다 (Google Cloud 콘솔 → OAuth 클라이언트 → 데스크톱 앱)")
@@ -134,3 +143,27 @@ if __name__ == "__main__":
     cid = sys.argv[1] if len(sys.argv) > 1 else None
     authorize(cid)
     print("YouTube 채널 연결 완료:", token_file(cid))
+
+
+def channel_info(channel_id=None, refresh=False):
+    """Which YouTube channel this login uploads to: {"title","id","url","thumbnail"} (cached)."""
+    from . import db
+    key = "ytchannel:" + (channel_id or "")
+    cached = db.kv_get(key)
+    if cached and not refresh:
+        return cached
+    if not connected(channel_id):
+        return None
+    try:
+        res = _service(channel_id=channel_id).channels().list(part="snippet", mine=True).execute()
+        items = res.get("items") or []
+        if not items:
+            info = {"title": "(이 계정에 유튜브 채널 없음)", "id": "", "url": ""}
+        else:
+            it = items[0]
+            info = {"title": it["snippet"]["title"], "id": it["id"], "url": "https://www.youtube.com/channel/" + it["id"],
+                    "thumbnail": ((it["snippet"].get("thumbnails") or {}).get("default") or {}).get("url", "")}
+        db.kv_set(key, info)
+        return info
+    except Exception as ex:
+        return {"title": "(채널 이름 확인 실패: " + str(ex)[:80] + ")", "id": "", "url": ""}
