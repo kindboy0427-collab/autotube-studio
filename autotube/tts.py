@@ -114,6 +114,93 @@ def split_sentences(text, min_chars=12):
     return out or [text.strip()]
 
 
+def group_sentences(sentences, max_n=3, max_chars=200):
+    """Pack 2-3 short sentences into one request (Gemini TTS allows only ~100 requests/day on Tier 1).
+    Chunks stay short (10-15 s), so the cloned timbre does not drift."""
+    out = []
+    for s in sentences:
+        if out and out[-1][1] < max_n and len(out[-1][0]) + 1 + len(s) <= max_chars:
+            out[-1] = (out[-1][0] + " " + s, out[-1][1] + 1)
+        else:
+            out.append((s, 1))
+    return [t for t, _ in out]
+
+
+class DailyQuotaError(TTSError):
+    """The Gemini TTS daily request quota is used up. resume_at: UTC datetime when it resets."""
+
+    def __init__(self, resume_at, limit=None):
+        self.resume_at = resume_at
+        self.limit = limit
+        super().__init__(f"Gemini 음성 하루 요청 한도({limit or '?'}회) 소진 → {resume_kst(resume_at)} 이후 자동으로 이어서 제작")
+
+
+def _pacific_offset(utc):
+    """US Pacific offset without tzdata: PDT from the 2nd Sunday of March to the 1st Sunday of November."""
+    import datetime as dt
+
+    def nth_sunday(month, n):
+        d = dt.datetime(utc.year, month, 1)
+        d += dt.timedelta(days=(6 - d.weekday()) % 7 + 7 * (n - 1))
+        return d
+    start = nth_sunday(3, 2) + dt.timedelta(hours=10)   # 02:00 PST = 10:00 UTC
+    end = nth_sunday(11, 1) + dt.timedelta(hours=9)     # 02:00 PDT = 09:00 UTC
+    naive = utc.replace(tzinfo=None)
+    return dt.timedelta(hours=-7 if start <= naive < end else -8)
+
+
+def quota_day(utc=None):
+    """Gemini daily quotas reset at midnight US Pacific."""
+    import datetime as dt
+    utc = utc or dt.datetime.now(dt.timezone.utc)
+    return (utc + _pacific_offset(utc)).date().isoformat()
+
+
+def next_quota_reset(utc=None):
+    import datetime as dt
+    utc = utc or dt.datetime.now(dt.timezone.utc)
+    off = _pacific_offset(utc)
+    local_midnight = dt.datetime.combine((utc + off).date() + dt.timedelta(days=1), dt.time(), dt.timezone.utc)
+    return local_midnight - _pacific_offset(local_midnight)
+
+
+def resume_kst(utc):
+    import datetime as dt
+    k = utc.astimezone(dt.timezone(dt.timedelta(hours=9)))
+    return f"{k.month}/{k.day} {'오전' if k.hour < 12 else '오후'} {k.hour % 12 or 12}:{k.minute:02d}"
+
+
+def requests_today():
+    from . import db
+    return int(db.kv_get("tts_req:" + quota_day(), 0) or 0)
+
+
+def _count_request():
+    from . import db
+    key = "tts_req:" + quota_day()
+    db.kv_set(key, int(db.kv_get(key, 0) or 0) + 1)
+
+
+def _quota_error(ex):
+    """HTTP 429 with a per-day quota -> DailyQuotaError, else None (per-minute limits are retried)."""
+    import datetime as dt
+    body = getattr(ex, "body", "") or ""
+    if getattr(ex, "status", None) != 429 or not re.search(r"per[_ ]?day|PerDay", body, re.I):
+        return None
+    now = dt.datetime.now(dt.timezone.utc)
+    m = re.search(r'"retryDelay"\s*:\s*"(\d+)', body)
+    hm = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", body)
+    if m:
+        resume = now + dt.timedelta(seconds=int(m.group(1)) + 120)
+    elif hm and any(hm.groups()):
+        h, mi, s = (float(x or 0) for x in hm.groups())
+        resume = now + dt.timedelta(hours=h, minutes=mi, seconds=s + 120)
+    else:
+        resume = next_quota_reset(now) + dt.timedelta(minutes=2)
+    lim = re.search(r'"quotaValue"\s*:\s*"(\d+)', body) or re.search(r"limit: (\d+) requests", body)
+    return DailyQuotaError(resume, int(lim.group(1)) if lim else None)
+
+
 def is_custom_voice(voice):
     return str(voice or "").startswith(("voice_", "voicekey_"))
 
@@ -126,7 +213,22 @@ def _gemini_once(text, voice, style, key, model):
             "input": [{"type": "user_input", "content": [item]}],
             "response_format": {"type": "audio"},
             "generation_config": {"speech_config": [{"voice": voice}]}}
-    res = http.post_json(GEMINI_BASE + "/interactions", body, headers={"x-goog-api-key": key}, timeout=300)
+    import time
+    waits = [20, 40, 60, 90, 120]  # short-term (per-minute) 429: slow down instead of failing the video
+    for attempt in range(len(waits) + 1):
+        try:
+            res = http.post_json(GEMINI_BASE + "/interactions", body, headers={"x-goog-api-key": key}, timeout=300)
+            break
+        except http.HttpError as ex:
+            q = _quota_error(ex)
+            if q:
+                raise q from ex
+            if ex.status != 429 or attempt == len(waits):
+                if ex.status == 429:
+                    raise TTSError("Gemini 음성 요청 제한(429) 계속됨: " + re.sub(r"\s+", " ", ex.body or "")[:300]) from ex
+                raise
+            time.sleep(waits[attempt])
+    _count_request()
     a = _gemini_audio_item(res)
     if not a:
         raise TTSError("Gemini 음성 데이터 없음")
@@ -181,7 +283,11 @@ def gemini(text, out_path, production_id=None, voice_id=None, style=""):
         style = style.split("; ")[-1] if style and "Channel tone" in style else style
         if s["production"].get("custom_voice_style", "light") == "off":
             style = ""
-        chunks = split_sentences(text) if s["production"].get("custom_voice_per_sentence", True) else [text]
+        if s["production"].get("custom_voice_per_sentence", True):
+            n = int(s["production"].get("custom_voice_group_sentences", 3) or 1)
+            chunks = group_sentences(split_sentences(text), max_n=max(1, n))
+        else:
+            chunks = [text]
     else:
         chunks = [text]
     tmpdir = tempfile.mkdtemp(prefix="tts_")
@@ -334,7 +440,7 @@ def synthesize(text, out_path, production_id=None, order=None, voice_id=None, vo
                 kw["voice_id"] = voice["ref"]
             path, words = PROVIDERS[name](text, out_path, production_id, **kw)
             return path, words, name
-        except budget.BudgetExceeded:
+        except (budget.BudgetExceeded, DailyQuotaError):
             raise
         except Exception as ex:  # try next provider
             errors.append(f"{name}: {str(ex)[:120]}")

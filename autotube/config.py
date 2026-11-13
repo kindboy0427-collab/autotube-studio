@@ -69,7 +69,8 @@ DEFAULTS = {
         "emphasis_pause_seconds": 1.2,   # silence after key lines (music swells under it)
         "align_subtitles": "auto",       # auto: local faster-whisper word timing if installed, else proportional
         "whisper_model": "small",
-        "custom_voice_per_sentence": True,  # my/designed Gemini voice: one request per sentence (stops mid-clip voice switching)
+        "custom_voice_per_sentence": True,  # my/designed Gemini voice: short chunks (stops mid-clip voice switching)
+        "custom_voice_group_sentences": 3,  # sentences per request (Tier 1 = 100 TTS requests/day); 1 = old one-per-sentence
         "custom_voice_style": "off",       # off: no style cue for my voice (cues can pull it away from my timbre) / light
         "voice_check": True,               # regenerate scenes whose voice pitch jumps (male<->female)
         "voice_fallback": "same_voice",  # same_voice: a channel with its own voice never switches to another voice mid-video
@@ -81,6 +82,7 @@ DEFAULTS = {
         "script": "auto",                # auto: Claude Pro(Claude Code) > ChatGPT Plus(Codex) > OpenAI API > Gemini API
         "tts": "auto",                   # auto(Gemini TTS > ElevenLabs > OpenAI > edge) / gemini / elevenlabs / openai / edge
         "gemini_tts_model": "gemini-3.8-flash-tts",      # GA 2026-09; flash-lite-tts is cheaper
+        "gemini_tts_daily_limit": 100,                   # requests/day per model on Tier 1 (shown on the dashboard)
         "gemini_tts_voice": "Kore",                       # prebuilt voice, or a voice_... id (your replicated voice)
         "gemini_text_model": "gemini-3.8-flash",
         "gemini_watch_model": "gemini-3.8-flash",

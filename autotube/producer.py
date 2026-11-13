@@ -585,6 +585,13 @@ def run(pid, providers=Providers):
         _set(pid, status=status, step="done", progress=100, finished_at=db.now())
         db.event("info", "produce", f"제작 완료: {plan['title']} (${budget.production_cost(pid):.2f} 추정)")
         return status
+    except tts.DailyQuotaError as ex:
+        # not a failure: everything made so far is kept, and the worker resumes it after the reset
+        db.kv_set("quota_resume:" + pid, ex.resume_at.isoformat())
+        _set(pid, status="waiting_quota", error=str(ex))
+        _log(pid, f"⏸ {ex} (오늘 음성 요청 {tts.requests_today()}회 사용)")
+        db.event("warn", "produce", f"{pid}: {ex}")
+        return "waiting_quota"
     except Exception as ex:
         _set(pid, status="failed", error=f"{type(ex).__name__}: {str(ex)[:500]}")
         _log(pid, "오류: " + traceback.format_exc()[-1200:])
@@ -604,6 +611,33 @@ class Worker:
         for r in db.rows("SELECT id FROM productions WHERE status IN ('queued','running') ORDER BY created_at"):
             self.q.put(r["id"])
         self.thread.start()
+        threading.Thread(target=self._resume_loop, name="quota-resume", daemon=True).start()
+
+    def resume_due(self, now=None):
+        """Re-queue productions paused by the daily voice quota once the quota has reset."""
+        import datetime as dt
+        now = now or dt.datetime.now(dt.timezone.utc)
+        done = []
+        for r in db.rows("SELECT id FROM productions WHERE status='waiting_quota' ORDER BY created_at"):
+            at = db.kv_get("quota_resume:" + r["id"])
+            try:
+                due = not at or dt.datetime.fromisoformat(at) <= now
+            except ValueError:
+                due = True
+            if due:
+                _log(r["id"], "▶ 음성 한도가 초기화되어 이어서 제작합니다")
+                self.submit(r["id"])
+                done.append(r["id"])
+        return done
+
+    def _resume_loop(self):
+        import time
+        while True:
+            time.sleep(300)
+            try:
+                self.resume_due()
+            except Exception as ex:
+                db.event("warn", "produce", f"한도 대기 재개 확인 실패: {str(ex)[:200]}")
 
     def submit(self, pid):
         db.execute("UPDATE productions SET status='queued', error=NULL WHERE id=?", (pid,))

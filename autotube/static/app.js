@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const STATUS = {waiting_images:'이미지 기다리는 중', queued:'대기', running:'제작 중', ready:'완성(미업로드)', uploaded_private:'비공개 업로드됨', published:'공개됨', failed:'실패'};
+const STATUS = {waiting_images:'이미지 기다리는 중', waiting_quota:'음성 한도 대기 (자동 재개)', queued:'대기', running:'제작 중', ready:'완성(미업로드)', uploaded_private:'비공개 업로드됨', published:'공개됨', failed:'실패'};
 const STEP = {plan:'대본 기획', voice:'내레이션', visuals:'영상·이미지', music:'배경음악', render:'렌더링', thumbnail:'썸네일', upload:'업로드', done:'완료'};
 const FEAT = {hook:'도입', retention:'이탈방지', engagement:'참여유도', narration:'내레이션', visual:'화면', emotion:'감정', opens_with:'첫 감정', title:'제목', pace:'말속도', shots:'컷 길이', cta:'구독요청', format:'형식'};
 let S = {}, openId = null;
@@ -50,6 +50,7 @@ async function loadStatus() {
   $('kMonth').textContent = `이번 달 $${S.budget.month_usd.toFixed(2)} / 한도 $${S.settings.budget.monthly_usd}`;
   $('kQuota').textContent = S.budget.youtube_quota_today.toLocaleString();
   $('kYt').textContent = `/ ${S.settings.youtube_quota_per_day.toLocaleString()} 단위`;
+  if (S.tts_today && $('kTts')) { $('kTts').textContent = `${S.tts_today.used} / ${S.tts_today.limit}`; $('kTtsReset').textContent = `내 목소리 요청 · ${S.tts_today.reset} 초기화` }
   const k = S.keys, items = [
     [k.GEMINI_API_KEY.set && !(S.gemini_check && !S.gemini_check.ok), 'Gemini API 키 (영상 시청·분석·이미지·영상 생성)' + (S.gemini_check && !S.gemini_check.ok ? ' — ⚠ 키가 맞지 않음: ' + S.gemini_check.message : '')],
     [k.YOUTUBE_API_KEY.set, 'YouTube Data API 키 (검색·통계)'],

@@ -197,13 +197,13 @@ class CustomVoiceChunks(TempHome):
         with patch("autotube.http.post_json", side_effect=fake):
             tts.synthesize(text, str(out), voice={"engine": "gemini", "ref": "voice_me"},
                            style=tts.style_for("curiosity", "경이로운 다큐"))
-        self.assertEqual(len(bodies), 3)
+        self.assertEqual(len(bodies), 1)  # v1.9.3: up to 3 sentences per request
         for b in bodies:
             self.assertEqual(b["generation_config"]["speech_config"], [{"voice": "voice_me"}])
             style = b["input"][0]["content"][0]["annotations"][0]["style"]
             self.assertNotIn("Channel tone", style)  # no persona that could pull away from my timbre
         from autotube import media
-        self.assertAlmostEqual(media.duration(out), 3 + 2 * 0.18, delta=0.25)
+        self.assertAlmostEqual(media.duration(out), 1, delta=0.25)
 
     def test_my_voice_has_no_style_by_default(self):
         bodies = []
