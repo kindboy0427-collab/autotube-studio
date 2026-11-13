@@ -87,10 +87,14 @@ async function loadList() {
     <div><span class="badge ${esc(p.status)}">${esc(STATUS[p.status] || p.status)}</span></div>
     <div class="bar"><i style="width:${Math.round(p.progress || 0)}%"></i></div></div>`).join('') || '<p class="hint">아직 제작한 영상이 없습니다.</p>';
   document.querySelectorAll('.prod').forEach(el => el.onclick = () => showDetail(el.dataset.id));
-  if (openId) showDetail(openId, true);
+  // re-draw the open detail only when it actually changed (re-drawing reloads the video = flicker)
+  const cur = openId && list.find(p => p.id === openId);
+  const sig = cur ? [cur.status, cur.step, Math.round(cur.progress || 0), cur.youtube_id, cur.error].join('|') : '';
+  if (openId && sig !== window._lastSig) { window._lastSig = sig; showDetail(openId, true) }
 }
 
 async function showDetail(id, quiet) {
+  if (!quiet) window._lastSig = null;
   openId = id;
   const p = await api('/api/productions/' + id), plan = p.plan || {};
   const d = $('detail'); d.hidden = false;
@@ -104,6 +108,7 @@ async function showDetail(id, quiet) {
       ${p.status === 'failed' ? '<button id="dRetry" class="primary">이어서 다시 시도</button>' : ''}
       ${p.video_path && !p.youtube_id ? '<button id="dUpload" class="primary">비공개 업로드</button>' : ''}
       ${p.youtube_id && p.privacy !== 'public' ? '<button id="dPublish" class="primary">검토 완료 → 공개</button>' : ''}
+      ${(plan.scenes || []).length ? '<button id="dRevoice">내레이션만 다시 만들기</button>' : ''}
       <button id="dReplan">대본부터 새로 만들기</button>
     </div>
     ${(plan.titles || []).length ? `<h4>제목 후보</h4><div>${plan.titles.map(t => `<div>· ${esc(t)}</div>`).join('')}</div>` : ''}
@@ -120,6 +125,7 @@ async function showDetail(id, quiet) {
   bind('dUpload', () => post(`/api/productions/${id}/upload`));
   bind('dPublish', () => confirm('이 영상을 공개할까요?') && post(`/api/productions/${id}/publish`, {privacy: 'public'}));
   bind('fbSend', async () => { const t = $('fbText').value.trim(); if (t) { const r = await post(`/api/channels/${p.channel_id}/feedback`, {feedback: t}); alert('채널 규칙이 갱신되었습니다:\n' + r.style_guide) } });
+  bind('dRevoice', () => confirm('대본·이미지·영상은 그대로 두고 내레이션만 다시 만든 뒤 다시 렌더링할까요? (몇 십 원 수준)') && post(`/api/productions/${id}/revoice`));
   bind('dReplan', () => confirm('대본과 작업 파일을 지우고 새로 만들까요?') && post(`/api/productions/${id}/replan`));
   if (!quiet) d.scrollIntoView({behavior: 'smooth'});
 }

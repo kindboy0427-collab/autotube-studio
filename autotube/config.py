@@ -54,7 +54,7 @@ DEFAULTS = {
     # ---------- production ----------
     "production": {
         "target_minutes": 10,
-        "chars_per_second": 6.5,         # Korean narration speed estimate for script length
+        "chars_per_second": 8.5,         # Korean narration speed (chars incl. spaces / s); auto-calibrated per voice after each video
         "max_ai_video_clips": 6,         # Gemini Omni clips per video (most expensive part)
         "ai_image_ratio": 0.45,          # share of non-video scenes that use AI images (rest = stock)
         "burn_subtitles": True,
@@ -68,7 +68,8 @@ DEFAULTS = {
         "align_subtitles": "auto",       # auto: local faster-whisper word timing if installed, else proportional
         "whisper_model": "small",
         "custom_voice_per_sentence": True,  # my/designed Gemini voice: one request per sentence (stops mid-clip voice switching)
-        "custom_voice_style": "light",     # light: short delivery cue only / off: no style for my voice
+        "custom_voice_style": "off",       # off: no style cue for my voice (cues can pull it away from my timbre) / light
+        "voice_check": True,               # regenerate scenes whose voice pitch jumps (male<->female)
         "voice_fallback": "same_voice",  # same_voice: a channel with its own voice never switches to another voice mid-video
                                          # any: fall back to other engines (mixed voices)
         "resolution": "1920x1080",

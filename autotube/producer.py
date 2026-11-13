@@ -17,7 +17,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from . import align, budget, channels, config, db, gemini, media, music, planner, stock, tts
+from . import align, budget, channels, config, db, gemini, media, music, planner, stock, tts, voicecheck
 
 STEPS = ["plan", "voice", "visuals", "music", "render", "thumbnail", "upload", "done"]
 PROGRESS = {"plan": 5, "voice": 20, "visuals": 40, "music": 75, "render": 80, "thumbnail": 92, "upload": 95, "done": 100}
@@ -133,7 +133,7 @@ def _visual(pid, s, i, d, folder, used, providers, credits):
 def channel_voices(channel):
     """(main, accent) voice specs for a channel. v1.2 channels only had an ElevenLabs id in voice_id."""
     if not channel:
-        return None, None
+        return default_own_voice(), None
     raw = channel.get("voice") or ""
     spec = None
     if raw:
@@ -147,7 +147,23 @@ def channel_voices(channel):
         return main, acc
     if channel.get("voice_id"):
         return tts.parse_voice(channel["voice_id"]), None
-    return None, None
+    return default_own_voice(), None
+
+
+def default_own_voice():
+    """No voice chosen for the channel -> use the owner's registered voice if there is one."""
+    r = db.one("SELECT engine, ref FROM voices WHERE kind IN ('clone','manual') ORDER BY created_at LIMIT 1")
+    return {"engine": r["engine"], "ref": r["ref"]} if r else None
+
+
+def voice_label(v):
+    if not v:
+        return "기본 설정 (설정 탭의 음성 엔진 순서)"
+    try:
+        r = db.one("SELECT name FROM voices WHERE ref=?", (v.get("ref", ""),))
+    except Exception:
+        r = None
+    return (r["name"] if r else v.get("ref") or "") + f" [{v.get('engine')}]"
 
 
 def kinds_all(work):
@@ -223,22 +239,67 @@ def run(pid, providers=Providers):
         voice_used = set()
         main_voice, accent_voice = channel_voices(channel)
         tone = (channel or {}).get("tone", "")
-        for i, sc in enumerate(scenes):
+        _log(pid, "내레이션 목소리: " + voice_label(main_voice) + (f" (강조 장면: {voice_label(accent_voice)})" if accent_voice else ""))
+
+        def synth(i, sc):
             mp3 = work / f"s{i:03d}_voice.mp3"
-            meta = work / f"s{i:03d}_voice.json"
-            if not (mp3.exists() and meta.exists()):
-                use = accent_voice if (accent_voice and sc.get("importance", 1) >= 3) else main_voice
-                _, words, engine = providers.tts(sc["narration"], str(mp3), production_id=pid, voice=use,
-                                                 style=tts.style_for(sc.get("emotion", ""), tone))
-                dur = media.duration(mp3)
-                if not words:
-                    words = align.words_for(sc["narration"], str(mp3), dur) or media.proportional_words(sc["narration"], dur)
-                meta.write_text(json.dumps({"duration": dur, "words": words, "engine": engine}, ensure_ascii=False), encoding="utf-8")
-            info = json.loads(meta.read_text(encoding="utf-8"))
+            raw = work / f"s{i:03d}_voice_raw.mp3"
+            use = accent_voice if (accent_voice and sc.get("importance", 1) >= 3) else main_voice
+            _, words, engine = providers.tts(sc["narration"], str(raw), production_id=pid, voice=use,
+                                             style=tts.style_for(sc.get("emotion", ""), tone))
+            try:
+                voicecheck.normalize(raw, mp3)  # same loudness in every scene
+            except Exception:
+                raw.replace(mp3)
+            return words, engine
+
+        def save_meta(i, sc, words, engine):
+            mp3 = work / f"s{i:03d}_voice.mp3"
+            dur = media.duration(mp3)
+            if not words:
+                words = align.words_for(sc["narration"], str(mp3), dur) or media.proportional_words(sc["narration"], dur)
+            (work / f"s{i:03d}_voice.json").write_text(json.dumps({"duration": dur, "words": words, "engine": engine},
+                                                                  ensure_ascii=False), encoding="utf-8")
+
+        new_idx = []
+        for i, sc in enumerate(scenes):
+            if not ((work / f"s{i:03d}_voice.mp3").exists() and (work / f"s{i:03d}_voice.json").exists()):
+                words, engine = synth(i, sc)
+                save_meta(i, sc, words, engine)
+                new_idx.append(i)
+            _set(pid, progress=PROGRESS["voice"] + 18 * (i + 1) / len(scenes))
+        # voice-switch guard: a scene whose pitch is far from the rest (male<->female) is regenerated
+        if ps.get("voice_check", True) and new_idx:
+            pitches = [voicecheck.median_pitch(work / f"s{i:03d}_voice.mp3") for i in range(len(scenes))]
+            bad = voicecheck.outliers(pitches)
+            for attempt in range(2):
+                if not bad:
+                    break
+                _log(pid, f"목소리가 다르게 나온 장면 {', '.join(str(b + 1) for b in bad)} → 다시 생성 ({attempt + 1}차)")
+                for b in bad:
+                    words, engine = synth(b, scenes[b])
+                    save_meta(b, scenes[b], words, engine)
+                    pitches[b] = voicecheck.median_pitch(work / f"s{b:03d}_voice.mp3")
+                bad = [b for b in voicecheck.outliers(pitches) if b in bad]
+            if bad:
+                _log(pid, f"⚠ 장면 {', '.join(str(b + 1) for b in bad)}은 여전히 목소리가 달라 보입니다 — 완성 후 확인하세요")
+        for i, sc in enumerate(scenes):
+            info = json.loads((work / f"s{i:03d}_voice.json").read_text(encoding="utf-8"))
             sc["_voice"] = {"duration": info["duration"], "words": info["words"]}
             voice_used.add(info.get("engine"))
-            _set(pid, progress=PROGRESS["voice"] + 20 * (i + 1) / len(scenes))
         _log(pid, "내레이션 완료 (" + ",".join(sorted(x for x in voice_used if x)) + ")")
+        # learn the real speaking speed of this voice -> next scripts get the right length
+        spoken = sum(sc["_voice"]["duration"] for sc in scenes)
+        chars = sum(len(sc["narration"]) for sc in scenes)
+        if spoken > 20:
+            key = "cps:" + ((main_voice or {}).get("ref") or (main_voice or {}).get("engine") or "default")
+            measured = chars / spoken
+            old = db.kv_get(key)
+            db.kv_set(key, round(measured if not old else 0.6 * measured + 0.4 * float(old), 2))
+            minutes_req = db.kv_get("minutes:" + pid) or 0
+            if minutes_req and spoken < minutes_req * 60 * 0.8:
+                _log(pid, f"⚠ 실제 길이 {spoken / 60:.1f}분 (요청 {minutes_req}분): 이 목소리의 말 속도({measured:.1f}자/초)를 "
+                          "학습했습니다. 다음 영상부터 길이가 맞춰집니다. 이 영상은 [대본부터 새로 만들기]로 다시 만들면 맞춰집니다.")
 
         # 3 visuals ---------------------------------------------------------
         _set(pid, step="visuals", progress=PROGRESS["visuals"])

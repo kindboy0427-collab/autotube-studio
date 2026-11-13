@@ -27,6 +27,7 @@ class GeminiTTS(TempHome):
         config.set_secrets({"GEMINI_API_KEY": "g"})
 
     def test_request_shape_pcm_and_cost(self):
+        config.save_settings({"production": {"custom_voice_style": "light"}})
         sent = {}
 
         def fake(url, body, headers=None, **kw):
@@ -184,6 +185,7 @@ class CustomVoiceChunks(TempHome):
         config.set_secrets({"GEMINI_API_KEY": "g"})
 
     def test_my_voice_is_generated_sentence_by_sentence(self):
+        config.save_settings({"production": {"custom_voice_style": "light"}})
         bodies = []
 
         def fake(url, body, headers=None, **kw):
@@ -202,6 +204,14 @@ class CustomVoiceChunks(TempHome):
             self.assertNotIn("Channel tone", style)  # no persona that could pull away from my timbre
         from autotube import media
         self.assertAlmostEqual(media.duration(out), 3 + 2 * 0.18, delta=0.25)
+
+    def test_my_voice_has_no_style_by_default(self):
+        bodies = []
+        with patch("autotube.http.post_json", side_effect=lambda u, b, **k: bodies.append(b) or {"steps": [{"type": "model_output",
+                   "content": [{"type": "audio", "mime_type": "audio/L16;rate=24000", "data": pcm_b64(1.0)}]}]}):
+            tts.synthesize("문장입니다.", str(Path(self.tmp) / "d.mp3"), voice={"engine": "gemini", "ref": "voice_me"},
+                           style=tts.style_for("surprise", "다큐"))
+        self.assertNotIn("annotations", bodies[0]["input"][0]["content"][0])
 
     def test_prebuilt_voice_single_request(self):
         n = []
@@ -240,3 +250,35 @@ class RemoteVoices(TempHome):
             with self.assertRaises(voices.VoiceError) as cm:
                 voices.register_gemini("me", src, con)
         self.assertIn("Consent phrase does not match", str(cm.exception))
+
+
+class VoiceGuards(TempHome):
+    def _tone(self, path, hz, vol=0.5):
+        subprocess.run([config.ffmpeg_bin(), "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                        f"sine=frequency={hz}:duration=2", "-af", f"volume={vol}", str(path)], check=True)
+        return path
+
+    def test_pitch_outlier_detects_voice_switch(self):
+        from autotube import voicecheck
+        low = [voicecheck.median_pitch(self._tone(Path(self.tmp) / f"m{i}.wav", 120)) for i in range(4)]
+        high = voicecheck.median_pitch(self._tone(Path(self.tmp) / "f.wav", 230))
+        self.assertAlmostEqual(low[0], 120, delta=12)
+        self.assertEqual(voicecheck.outliers(low + [high]), [4])
+
+    def test_normalize_evens_loudness(self):
+        from autotube import voicecheck
+        quiet = self._tone(Path(self.tmp) / "q.wav", 200, 0.05)
+        loud = self._tone(Path(self.tmp) / "l.wav", 200, 0.9)
+        def peak(p):
+            r = subprocess.run([config.ffmpeg_bin(), "-i", str(p), "-af", "volumedetect", "-f", "null", "-"],
+                               capture_output=True, text=True)
+            import re
+            return float(re.search(r"mean_volume: (-?[\d.]+)", r.stderr).group(1))
+        a = voicecheck.normalize(quiet, Path(self.tmp) / "qa.mp3")
+        b = voicecheck.normalize(loud, Path(self.tmp) / "la.mp3")
+        self.assertLess(abs(peak(a) - peak(b)), 2.0)
+
+    def test_default_to_my_voice_when_channel_has_none(self):
+        from autotube import producer
+        voices.add_manual("MyVoice_KR_EN", "gemini", "voice_kim")
+        self.assertEqual(producer.channel_voices({"id": "x", "voice": "", "voice_id": ""})[0], {"engine": "gemini", "ref": "voice_kim"})

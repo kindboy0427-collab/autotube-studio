@@ -229,6 +229,24 @@ def replan(pid: str):
     return {"ok": True}
 
 
+@app.post("/api/productions/{pid}/revoice")
+def revoice(pid: str):
+    """Redo only the narration (keeps script, AI images/videos, stock, music) and re-render."""
+    r = db.one("SELECT output_dir, youtube_id FROM productions WHERE id=?", (pid,))
+    if not r:
+        raise HTTPException(404)
+    work = Path(r["output_dir"] or "", "work")
+    if work.exists():
+        for pat in ("s*_voice*", "s*_clip.mp4", "s*_base.mp4", "narration.wav", "mixed.wav", "video_only.mp4", "*_list.txt"):
+            for f in work.glob(pat):
+                f.unlink(missing_ok=True)
+    for name in ("video.mp4", "subtitles.srt"):
+        Path(r["output_dir"] or "", name).unlink(missing_ok=True)
+    db.execute("UPDATE productions SET video_path=NULL, status='queued', step='voice' WHERE id=?", (pid,))
+    WORKER.submit(pid)
+    return {"ok": True, "note": "이미 유튜브에 올라간 영상은 그대로 두고 새로 올립니다" if r["youtube_id"] else ""}
+
+
 @app.post("/api/productions/{pid}/upload")
 def upload_now(pid: str):
     from . import youtube_upload

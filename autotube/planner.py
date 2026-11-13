@@ -174,9 +174,22 @@ def _studies(cid):
     return json.dumps(block, ensure_ascii=False)[:5000]
 
 
+def cps_for(channel=None):
+    """Narration speed measured on this channel's real voice (falls back to the setting)."""
+    try:
+        from . import producer
+        v = producer.channel_voices(channel)[0]
+        key = "cps:" + ((v or {}).get("ref") or (v or {}).get("engine") or "default")
+        val = db.kv_get(key)
+        if val:
+            return float(val)
+    except Exception:
+        pass
+    return float(config.load_settings()["production"]["chars_per_second"])
+
+
 def build_prompt(topic, instructions, minutes, features, channel=None, script_format="auto"):
-    s = config.load_settings()["production"]
-    cps = s["chars_per_second"]
+    cps = cps_for(channel)
     total = minutes * 60
     pb = learner.playbook()
     short_pb = {"do": {k: [x["feature"] for x in v] for k, v in pb["do"].items()},
@@ -197,7 +210,7 @@ def build_prompt(topic, instructions, minutes, features, channel=None, script_fo
         recent=json.dumps(_recent_titles(), ensure_ascii=False))
 
 
-def validate(plan, minutes):
+def validate(plan, minutes, cps=None):
     if not isinstance(plan, dict):
         raise PlanError("기획 JSON 형식 오류")
     scenes = [s for s in plan.get("scenes", []) if isinstance(s, dict) and str(s.get("narration", "")).strip()]
@@ -226,9 +239,10 @@ def validate(plan, minutes):
     if plan.get("format") not in FORMATS:
         plan["format"] = None
     total_chars = sum(len(s["narration"]) for s in scenes)
-    target = minutes * 60 * config.load_settings()["production"]["chars_per_second"]
+    cps = cps or float(config.load_settings()["production"]["chars_per_second"])
+    target = minutes * 60 * cps
     plan["_stats"] = {"scenes": len(scenes), "chars": total_chars, "target_chars": int(target),
-                      "est_minutes": round(total_chars / config.load_settings()["production"]["chars_per_second"] / 60, 1)}
+                      "est_minutes": round(total_chars / cps / 60, 1)}
     return plan
 
 
@@ -266,7 +280,7 @@ def self_review(plan, channel, generate, minutes):
     out = generate(REVIEW_PROMPT.format(style_guide=(channel or {}).get("style_guide") or "(없음)",
                                         plan=json.dumps(slim, ensure_ascii=False)[:60000]))
     try:
-        reviewed = validate(out, minutes)
+        reviewed = validate(out, minutes, cps_for(channel))
     except PlanError:
         return plan
     if reviewed["_stats"]["chars"] < plan["_stats"]["chars"] * 0.75:  # reviewer must not gut the script
@@ -285,12 +299,13 @@ def make_plan(topic, instructions="", minutes=None, production_id=None, generate
     features, explored = learner.choose_features()
     script_format = script_format or config.load_settings()["production"].get("script_format", "auto")
     prompt = build_prompt(topic, instructions, minutes, features, channel, script_format)
-    plan = validate(generate(prompt), minutes)
-    if plan["_stats"]["chars"] < plan["_stats"]["target_chars"] * 0.7:
+    cps = cps_for(channel)
+    plan = validate(generate(prompt), minutes, cps)
+    if plan["_stats"]["chars"] < plan["_stats"]["target_chars"] * 0.85:
         more = generate(prompt + f"\n\n[수정 요청] 직전 초안의 내레이션이 {plan['_stats']['chars']}자로 너무 짧다. "
                                  f"목표 {plan['_stats']['target_chars']}자에 맞게 장면을 늘리고 내용을 깊게 써서 JSON 전체를 다시 출력하라.")
         try:
-            plan2 = validate(more, minutes)
+            plan2 = validate(more, minutes, cps)
             if plan2["_stats"]["chars"] > plan["_stats"]["chars"]:
                 plan = plan2
         except PlanError:
@@ -298,7 +313,7 @@ def make_plan(topic, instructions="", minutes=None, production_id=None, generate
     reason = too_similar(plan)
     if reason:
         try:
-            plan2 = validate(generate(prompt + f"\n\n[수정 요청] {reason}. 완전히 다른 각도의 제목과 도입으로 다시 작성하라."), minutes)
+            plan2 = validate(generate(prompt + f"\n\n[수정 요청] {reason}. 완전히 다른 각도의 제목과 도입으로 다시 작성하라."), minutes, cps)
             if not too_similar(plan2):
                 plan = plan2
         except PlanError:
