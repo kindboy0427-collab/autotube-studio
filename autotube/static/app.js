@@ -58,7 +58,7 @@ async function loadStatus() {
     [k.ELEVENLABS_API_KEY.set, 'ElevenLabs (선택: 내 목소리 복제·감정 연기·배경음악)'],
     [S.align_available, '자막 싱크 정밀 맞춤 (선택: pip install faster-whisper)'],
     [k.PEXELS_API_KEY.set, 'Pexels 무료 스톡 키 (없으면 AI 이미지로 대체)'],
-    [S.youtube_connected, 'YouTube 채널 연결 (비공개 자동 업로드)'],
+    [S.youtube_connected, 'YouTube 채널 연결 (채널 탭 — 비공개 자동 업로드)'],
     [S.ffmpeg, 'FFmpeg (영상 렌더링)'],
     [!!S.font, '한글 폰트 (자막·썸네일)'],
     [S.channels_count > 0 || (S.settings.learning.niches || []).length > 0, '채널 만들기 (채널 탭 — 채널 분야로 AI가 학습할 영상을 찾음)'],

@@ -103,7 +103,7 @@ DEFAULTS = {
     "budget": {"daily_usd": 10.0, "monthly_usd": 150.0},
     "youtube_quota_per_day": 10000,
     # ---------- self-update (no manual download) ----------
-    "update": {"auto": True, "repo": "kindboy0427-collab/autotube-studio", "branch": "main", "check_hours": 3},
+    "update": {"auto": True, "repo": "kindboy0427-collab/autotube-studio", "branch": "main", "check_hours": 1},
     "web_port": 8770,
 }
 
