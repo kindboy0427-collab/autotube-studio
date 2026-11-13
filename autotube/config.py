@@ -25,7 +25,7 @@ SECRET_KEYS = {
     "OPENAI_API_KEY": "OpenAI API (대본, 보조 음성)",
     "ELEVENLABS_API_KEY": "ElevenLabs (내 목소리 복제·감정 연기·배경음악)",
     "PEXELS_API_KEY": "Pexels (무료 스톡 영상·사진)",
-    "GITHUB_TOKEN": "GitHub 읽기 토큰 (업데이트 저장소가 비공개일 때만 필요)",
+    "GITHUB_TOKEN": "GitHub 토큰 — 지금은 필요 없음 (비워두세요. 업데이트 저장소를 비공개로 바꿀 때만 사용)",
     "APIFY_TOKEN": "Apify (자막으로 저렴하게 영상 분석 — Gemini 무료 한도 소진 시)",
 }
 
