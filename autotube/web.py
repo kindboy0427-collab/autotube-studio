@@ -158,6 +158,7 @@ def status():
             "ffmpeg": bool(shutil.which(config.ffmpeg_bin()) or Path(config.ffmpeg_bin()).exists()),
             "font": config.font_path(), "events": db.events(30), "subscriptions": subscription.status(),
             "voices_mine": db.one("SELECT COUNT(*) c FROM voices")["c"],
+            "gemini_check": db.kv_get("gemini_key_check"),
             "channels_count": db.one("SELECT COUNT(*) c FROM channels WHERE active=1")["c"], "align_available": align.available(),
             "formats": {k: v["name"] for k, v in planner.FORMATS.items()}}
 
@@ -333,10 +334,42 @@ async def save_settings(request: Request):
     return config.save_settings(patch)
 
 
+def _test_gemini_key():
+    """Real check (not just 'a key is saved'): list one model with the key."""
+    from . import http
+    k = config.get_secret("GEMINI_API_KEY")
+    if not k:
+        res = {"ok": False, "message": "키 없음"}
+    else:
+        try:
+            http.get_json("https://generativelanguage.googleapis.com/v1beta/models", headers={"x-goog-api-key": k},
+                          params={"pageSize": 1}, retries=0, timeout=20)
+            res = {"ok": True, "message": "정상"}
+        except Exception as ex:
+            body = getattr(ex, "body", "") or str(ex)
+            try:
+                body = json.loads(body).get("error", {}).get("message", body)
+            except ValueError:
+                pass
+            res = {"ok": False, "message": str(body)[:200]}
+    res["key_tail"] = k[-4:] if k else ""
+    db.kv_set("gemini_key_check", res)
+    return res
+
+
 @app.post("/api/secrets")
 async def save_secrets(request: Request):
-    config.set_secrets(await request.json())
-    return config.secret_status()
+    data = await request.json()
+    config.set_secrets(data)
+    out = config.secret_status()
+    if data.get("GEMINI_API_KEY"):
+        out["gemini_check"] = _test_gemini_key()
+    return out
+
+
+@app.post("/api/secrets/test")
+def test_keys():
+    return {"gemini": _test_gemini_key()}
 
 
 @app.post("/api/youtube/connect")

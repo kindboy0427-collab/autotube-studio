@@ -50,7 +50,7 @@ async function loadStatus() {
   $('kQuota').textContent = S.budget.youtube_quota_today.toLocaleString();
   $('kYt').textContent = `/ ${S.settings.youtube_quota_per_day.toLocaleString()} 단위`;
   const k = S.keys, items = [
-    [k.GEMINI_API_KEY.set, 'Gemini API 키 (영상 시청·분석·이미지·영상 생성)'],
+    [k.GEMINI_API_KEY.set && !(S.gemini_check && !S.gemini_check.ok), 'Gemini API 키 (영상 시청·분석·이미지·영상 생성)' + (S.gemini_check && !S.gemini_check.ok ? ' — ⚠ 키가 맞지 않음: ' + S.gemini_check.message : '')],
     [k.YOUTUBE_API_KEY.set, 'YouTube Data API 키 (검색·통계)'],
     [S.subscriptions.claude_code.installed, 'Claude Pro 대본 (Claude Code 설치·로그인 — SETUP_SUBSCRIPTIONS.cmd)' + (S.subscriptions.claude_code.paused_until ? ' · 한도로 잠시 쉬는 중' : '')],
     [S.subscriptions.codex.installed, 'ChatGPT Plus 대본 (Codex 설치·로그인)' + (S.subscriptions.codex.paused_until ? ' · 한도로 잠시 쉬는 중' : '')],
@@ -163,7 +163,8 @@ function fillSettings() {
 }
 $('btnKeys').onclick = async () => {
   const vals = {}; document.querySelectorAll('[data-key]').forEach(i => { if (i.value.trim()) vals[i.dataset.key] = i.value.trim() });
-  await post('/api/secrets', vals); await loadStatus(); fillSettings(); alert('저장했습니다');
+  const r = await post('/api/secrets', vals); await loadStatus(); fillSettings();
+  alert(r.gemini_check ? (r.gemini_check.ok ? '저장했습니다. Gemini 키 확인: 정상 ✓' : 'Gemini 키가 올바르지 않습니다: ' + r.gemini_check.message + '\n\naistudio.google.com/apikey 에서 키를 다시 복사해 붙여넣으세요.') : '저장했습니다');
 };
 $('btnSettings').onclick = async () => {
   await post('/api/settings', {
@@ -176,7 +177,7 @@ $('btnSettings').onclick = async () => {
   await loadStatus(); alert('저장했습니다');
 };
 
-loadStatus();
+post('/api/secrets/test').catch(() => {}).finally(loadStatus);
 setInterval(() => { loadStatus(); if ($('list').classList.contains('on')) loadList() }, 8000);
 
 
