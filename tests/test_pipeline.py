@@ -174,3 +174,13 @@ class PipelineTest(TempHome):
         self.assertEqual(types.count("ai_video"), 3)
         self.assertEqual(types[0], "ai_video")
         self.assertEqual(types.count("ai_image"), 2)
+
+
+class DrawtextSpecialChars(TempHome):
+    def test_percent_and_quotes_in_on_screen_text(self):
+        config.save_settings({"production": {"resolution": "640x360", "fps": 24}})
+        base = Path(self.tmp) / "b.mp4"
+        ff(["-f", "lavfi", "-i", "color=c=blue:s=640x360:r=24:d=1", "-pix_fmt", "yuv420p", str(base)])
+        out = media.overlay_text(str(base), "순도 99.999999999% : 'Si' {x}", str(Path(self.tmp) / "o.mp4"))
+        self.assertTrue(Path(out).exists())
+        media.color_clip(1, str(Path(self.tmp) / "c.mp4"), text="100% 규소")

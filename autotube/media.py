@@ -90,7 +90,7 @@ def _ff_path(p):
 
 def drawtext_filter(textfile, size=64, y="h*0.08", box=True):
     font = config.font_path()
-    parts = [f"drawtext=textfile='{_ff_path(textfile)}'"]
+    parts = [f"drawtext=textfile='{_ff_path(textfile)}'", "expansion=none"]  # '%' in text (99.9%) must stay literal
     if font:
         parts.append(f"fontfile='{_ff_path(font)}'")
     parts += [f"fontsize={size}", "fontcolor=white", "borderw=4", "bordercolor=black@0.8",
