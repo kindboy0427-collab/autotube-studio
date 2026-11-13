@@ -56,14 +56,15 @@ async function loadStatus() {
     [S.subscriptions.codex.installed, 'ChatGPT Plus 대본 (Codex 설치·로그인)' + (S.subscriptions.codex.paused_until ? ' · 한도로 잠시 쉬는 중' : '')],
     [S.voices_mine > 0, '내 목소리 등록 (목소리 탭 — 없으면 Gemini 기본 목소리)'],
     [k.ELEVENLABS_API_KEY.set, 'ElevenLabs (선택: 내 목소리 복제·감정 연기·배경음악)'],
-    [S.align_available, '자막 싱크 정밀 맞춤 (선택: pip install faster-whisper)'],
+    [S.align_available, '자막 싱크 정밀 맞춤 (선택)' + (S.align_available ? '' : (S.align_install && S.align_install.state === 'running' ? ' — ' + S.align_install.message : (S.align_install && S.align_install.state === 'failed' ? ' — 설치 실패: ' + S.align_install.message : '')))],
     [k.PEXELS_API_KEY.set, 'Pexels 무료 스톡 키 (없으면 AI 이미지로 대체)'],
     [S.youtube_connected, 'YouTube 채널 연결 (채널 탭 — 비공개 자동 업로드)'],
     [S.ffmpeg, 'FFmpeg (영상 렌더링)'],
     [!!S.font, '한글 폰트 (자막·썸네일)'],
     [S.channels_count > 0 || (S.settings.learning.niches || []).length > 0, '채널 만들기 (채널 탭 — 채널 분야로 AI가 학습할 영상을 찾음)'],
   ];
-  $('checklist').innerHTML = items.map(([ok, t]) => `<li class="${ok ? 'ok' : 'no'}">${esc(t)}</li>`).join('');
+  $('checklist').innerHTML = items.map(([ok, t]) => `<li class="${ok ? 'ok' : 'no'}">${esc(t)}${!ok && t.startsWith('자막 싱크') && !(S.align_install && S.align_install.state === 'running') ? ' <button id="btnAlign">자동 설치</button>' : ''}</li>`).join('');
+  const ba = $('btnAlign'); if (ba) ba.onclick = async () => { ba.disabled = true; await post('/api/align/install'); loadStatus() };
   $('events').innerHTML = S.events.map(e => `<div class="${e.level}">${esc(e.created_at.slice(5, 16).replace('T', ' '))} · ${esc(e.message)}</div>`).join('') || '아직 활동 없음';
 }
 

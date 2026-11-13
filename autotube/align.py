@@ -26,15 +26,47 @@ def _model():
 
 
 def available():
+    import importlib
+    import importlib.util
+    importlib.invalidate_caches()
+    return importlib.util.find_spec("faster_whisper") is not None
+
+
+def _has_vad():
     try:
-        import faster_whisper  # noqa: F401
+        import onnxruntime  # noqa: F401  (optional; no wheel yet for the newest Python)
         return True
     except Exception:
         return False
 
 
+def install(log=lambda m: None):
+    """One-click install into the app's own Python. Works on Python versions where onnxruntime
+    has no wheel yet: installs faster-whisper without it and runs without the VAD filter."""
+    import subprocess
+    from . import updater
+    py = updater._python()
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    def pip(*args):
+        r = subprocess.run([py, "-m", "pip", "install", "--disable-pip-version-check", *args],
+                           capture_output=True, text=True, creationflags=flags)
+        return r.returncode == 0, (r.stdout + r.stderr)[-600:]
+    log("설치 중: faster-whisper")
+    ok, out = pip("faster-whisper")
+    if not ok:  # usually onnxruntime missing for this Python -> install the rest without it
+        log("onnxruntime 없이 설치 시도")
+        ok1, out1 = pip("ctranslate2", "av", "tokenizers", "huggingface_hub", "tqdm")
+        ok2, out2 = pip("--no-deps", "faster-whisper")
+        ok, out = ok1 and ok2, out1 + out2
+    if not ok:
+        raise RuntimeError("설치 실패: " + out[-400:])
+    log("설치 완료 — 첫 사용 때 음성 인식 모델(약 500MB)을 한 번 내려받습니다")
+    return True
+
+
 def recognise(audio_path):
-    segs, _ = _model().transcribe(audio_path, language="ko", word_timestamps=True, vad_filter=True)
+    segs, _ = _model().transcribe(audio_path, language="ko", word_timestamps=True, vad_filter=_has_vad())
     out = []
     for seg in segs:
         for w in seg.words or []:

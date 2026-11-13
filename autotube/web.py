@@ -159,7 +159,7 @@ def status():
             "font": config.font_path(), "events": db.events(30), "subscriptions": subscription.status(),
             "voices_mine": db.one("SELECT COUNT(*) c FROM voices")["c"],
             "gemini_check": db.kv_get("gemini_key_check"),
-            "channels_count": db.one("SELECT COUNT(*) c FROM channels WHERE active=1")["c"], "align_available": align.available(),
+            "channels_count": db.one("SELECT COUNT(*) c FROM channels WHERE active=1")["c"], "align_available": align.available(), "align_install": db.kv_get("align_install"),
             "formats": {k: v["name"] for k, v in planner.FORMATS.items()}}
 
 
@@ -365,6 +365,24 @@ async def save_secrets(request: Request):
     if data.get("GEMINI_API_KEY"):
         out["gemini_check"] = _test_gemini_key()
     return out
+
+
+@app.post("/api/align/install")
+def align_install():
+    if db.kv_get("align_install", {}).get("state") == "running":
+        return {"ok": True}
+
+    def job():
+        db.kv_set("align_install", {"state": "running", "message": "설치 중… (2~5분)"})
+        try:
+            align.install(lambda m: db.kv_set("align_install", {"state": "running", "message": m}))
+            db.kv_set("align_install", {"state": "done", "message": "설치 완료"})
+            db.event("info", "setup", "자막 싱크 정밀 맞춤(faster-whisper) 설치 완료")
+        except Exception as ex:
+            db.kv_set("align_install", {"state": "failed", "message": str(ex)[:300]})
+            db.event("warn", "setup", "faster-whisper 설치 실패: " + str(ex)[:200])
+    threading.Thread(target=job, daemon=True).start()
+    return {"ok": True}
 
 
 @app.post("/api/secrets/test")
