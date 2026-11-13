@@ -337,6 +337,9 @@ def run(pid, providers=Providers):
         else:
             minutes = db.kv_get("minutes:" + pid) or (channel or {}).get("target_minutes") or ps["target_minutes"]
             kw = {"script_format": prod["script_format"]} if prod.get("script_format") else {}
+            cpt = channels.get_concept(prod.get("channel_id"), db.kv_get("concept:" + pid)) if db.kv_get("concept:" + pid) else None
+            if cpt:
+                kw["concept"] = cpt
             plan = providers.plan(prod["topic"], prod.get("instructions") or "", minutes, production_id=pid, channel=channel, **kw)
             assign_visual_types(plan["scenes"], ps["max_ai_video_clips"], ps["ai_image_ratio"])
             _set(pid, plan=json.dumps(plan, ensure_ascii=False), features_used=json.dumps(plan.get("features_used", [])))

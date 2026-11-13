@@ -28,12 +28,12 @@ async def lifespan(app):
     config.ensure_dirs()
     db.init()
     watcher.seed_references()
-    if not db.kv_get("concept_ai_risk_v1"):  # owner chose the 'AI 위험 분석' concept for the tech channel (2026-11-13)
+    if not db.kv_get("concept_ai_risk_v2"):  # 'AI 위험 분석' = one series inside the science channel (owner, 2026-11-13)
         try:
-            channels.apply_ai_risk_concept("tech")
+            channels.migrate_ai_risk_to_concept("tech")
         except Exception:
             pass
-        db.kv_set("concept_ai_risk_v1", True)
+        db.kv_set("concept_ai_risk_v2", True)
     if not getattr(app.state, "no_background", False):
         WORKER.start()
         SCHED.start()
@@ -242,6 +242,7 @@ class NewProduction(BaseModel):
     channel_id: str | None = Field(default=None, max_length=40)
     script_format: str | None = Field(default=None, max_length=30)
     image_source: str | None = Field(default=None, pattern="^(ai|manual)$")
+    concept: str | None = Field(default=None, max_length=30)
 
 
 @app.post("/api/productions")
@@ -252,6 +253,8 @@ def new_production(body: NewProduction):
                           body.script_format if body.script_format in planner.FORMATS else None)
     if body.image_source:
         db.kv_set("imgsrc:" + pid, body.image_source)
+    if body.concept and body.channel_id and channels.get_concept(body.channel_id, body.concept):
+        db.kv_set("concept:" + pid, body.concept)
     WORKER.submit(pid)
     return {"id": pid}
 
@@ -554,6 +557,7 @@ def list_channels():
         c["radar"] = db.kv_get("radar:" + c["id"])
         from . import channel_study
         c["synth"] = channel_study.get_synth(c["id"])
+        c["concepts"] = channels.concepts(c["id"])
         out.append(c)
     return {"channels": out, "presets": channels.PRESETS}
 
@@ -570,6 +574,19 @@ async def save_channel(request: Request):
 
 class Feedback(BaseModel):
     feedback: str = Field(min_length=2, max_length=2000)
+
+
+@app.post("/api/channels/{cid}/concepts")
+async def save_concept(cid: str, request: Request):
+    if not channels.get(cid):
+        raise HTTPException(404)
+    data = await request.json()
+    if data.get("delete"):
+        channels.delete_concept(cid, data["delete"])
+        return {"ok": True}
+    if not str(data.get("name", "")).strip():
+        raise HTTPException(400, "컨셉 이름이 필요합니다")
+    return channels.save_concept(cid, data)
 
 
 @app.post("/api/channels/{cid}/feedback")

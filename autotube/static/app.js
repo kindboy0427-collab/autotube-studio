@@ -74,7 +74,7 @@ $('btnMake').onclick = async () => {
   if (topic.length < 2) return;
   $('btnMake').disabled = true;
   try {
-    const r = await post('/api/productions', {topic, instructions: $('instr').value, minutes: +$('minutes').value || 10, channel_id: $('makeChannel').value || null, script_format: $('makeFormat').value || null, image_source: $('makeImg').value});
+    const r = await post('/api/productions', {topic, instructions: $('instr').value, minutes: +$('minutes').value || 10, channel_id: $('makeChannel').value || null, script_format: $('makeFormat').value || null, image_source: $('makeImg').value, concept: $('makeConcept').value || null});
     $('makeMsg').innerHTML = `<div class="msg">제작을 시작했습니다. '제작 목록'에서 진행 상황을 볼 수 있습니다. (${esc(r.id)})</div>`;
     $('topic').value = ''; $('instr').value = '';
   } catch (e) { $('makeMsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>` }
@@ -253,13 +253,19 @@ function usageBlock(u) {
 let CH = [];
 async function loadChannels() {
   const d = await api('/api/channels'); CH = d.channels;
+  const keep = $('makeChannel').value;
   $('makeChannel').innerHTML = '<option value="">(채널 없이)</option>' + CH.filter(c => c.active).map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  if (keep) $('makeChannel').value = keep;
+  const fillConcepts = () => { const c = CH.find(x => x.id === $('makeChannel').value);
+    $('makeConcept').innerHTML = '<option value="">(일반 편)</option>' + ((c && c.concepts) || []).map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('') };
+  $('makeChannel').onchange = fillConcepts; fillConcepts();
   const have = new Set(CH.map(c => c.id));
   $('presetBox').innerHTML = d.presets.filter(p => !have.has(p.id)).map(p => `<button data-preset="${esc(p.id)}">+ ${esc(p.name)}</button>`).join('') + '<button id="chNew">+ 직접 만들기</button>';
   document.querySelectorAll('[data-preset]').forEach(b => b.onclick = async () => { await post('/api/channels', {preset: b.dataset.preset}); loadChannels() });
   $('chNew').onclick = () => editChannel({id: '', name: '', niches: [], audience: '', tone: '', voice_id: '', target_minutes: 10, monthly_videos: 8, style_guide: '', active: 1});
   $('chList').innerHTML = CH.map(c => `<div class="chcard"><b>${esc(c.name)}</b> <span class="badge">${c.active ? '운영' : '중지'}</span>
     <span class="badge ${c.connected ? 'ready' : ''}">${c.connected ? 'YouTube 연결됨' : 'YouTube 미연결'}</span>
+    ${(c.concepts || []).map(k => `<span class="badge">시리즈: ${esc(k.name)}</span>`).join(' ')}
     ${c.yt_channel ? `<span class="hint">→ 업로드 채널: ${c.yt_channel.url ? `<a href="${esc(c.yt_channel.url)}" target="_blank"><b>${esc(c.yt_channel.title)}</b></a>` : esc(c.yt_channel.title)}</span>` : ''}<br>
     <small class="hint">분야: ${esc(c.niches.join(', '))} · 학습한 영상 ${c.watched} · 제작 ${c.videos} · 목표 월 ${c.monthly_videos}편</small>
     <div class="row" style="margin-top:8px"><button data-edit="${esc(c.id)}">설정·제작 규칙</button><button data-conn="${esc(c.id)}">YouTube 연결</button>
@@ -290,6 +296,12 @@ function radarHtml(cid, r) {
     <small class="hint">왜 지금: ${esc(i.why_now)} · 감정: ${esc(i.entry_emotion)} → ${esc(i.exit_emotion)}</small><br>
     <button data-use="${esc(i.topic)}" data-ch="${esc(cid)}">이 주제로 만들기</button></div>`).join('');
 }
+function conceptForm(k) {
+  return `<div class="chcard concept" data-id="${esc(k.id)}"><div class="row"><div class="grow"><label>시리즈 이름</label><input class="kn" value="${esc(k.name)}"></div></div>
+    <label>이 시리즈로 학습할 키워드 (쉼표)</label><input class="kk" value="${esc((k.niches || []).join(', '))}">
+    <label>시리즈 규칙</label><textarea class="kr" rows="6">${esc(k.rules || '')}</textarea>
+    <button data-csave class="primary">시리즈 저장</button> ${k.id ? `<button data-cdel="${esc(k.id)}">삭제</button>` : ''}</div>`;
+}
 function editChannel(c) {
   const d = $('chEdit'); d.hidden = false;
   d.innerHTML = `<h3>${c.id ? esc(c.name) + ' 설정' : '새 채널'}</h3>
@@ -305,8 +317,19 @@ function editChannel(c) {
     <div><label>목표 월 제작 수</label><input id="ceMonthly" type="number" value="${c.monthly_videos}"></div>
     <div><label>상태</label><select id="ceActive"><option value="1">운영</option><option value="0">중지</option></select></div></div>
     <label>제작 규칙 (스킬) — 짧게, 피드백을 주면 AI가 자동으로 갱신</label><textarea id="ceGuide" rows="8">${esc(c.style_guide)}</textarea>
-    <button id="ceSave" class="primary">저장</button>`;
+    <button id="ceSave" class="primary">저장</button>
+    ${c.id ? `<h3>시리즈(컨셉) — 채널 안의 코너</h3><p class="hint">채널은 그대로 두고, 영상 만들 때 시리즈를 고르면 그 시리즈 규칙이 추가로 적용됩니다.</p>
+    <div id="ceConcepts">${(c.concepts || []).map(k => conceptForm(k)).join('')}</div>
+    <button id="ceAddConcept">+ 시리즈 추가</button>` : ''}`;
   $('ceActive').value = String(c.active ?? 1);
+  const bindConcepts = () => document.querySelectorAll('[data-csave]').forEach(b => b.onclick = async () => {
+    const box = b.closest('.concept');
+    await post(`/api/channels/${c.id}/concepts`, {id: box.dataset.id, name: box.querySelector('.kn').value, niches: box.querySelector('.kk').value, rules: box.querySelector('.kr').value});
+    b.textContent = '저장됨 ✓'; loadChannels();
+  });
+  document.querySelectorAll('[data-cdel]').forEach(b => b.onclick = async () => { if (confirm('이 시리즈를 지울까요?')) { await post(`/api/channels/${c.id}/concepts`, {delete: b.dataset.cdel}); b.closest('.concept').remove(); loadChannels() } });
+  bindConcepts();
+  const add = $('ceAddConcept'); if (add) add.onclick = () => { $('ceConcepts').insertAdjacentHTML('beforeend', conceptForm({id: '', name: '', niches: [], rules: ''})); bindConcepts() };
   let cur = {}; try { cur = c.voice ? JSON.parse(c.voice) : {} } catch {}
   if (!cur.engine && c.voice_id) cur = {engine: 'elevenlabs', ref: c.voice_id};
   voiceOptions().then(opts => {

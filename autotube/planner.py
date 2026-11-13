@@ -54,6 +54,9 @@ quote에 발언(확실한 것만, 지어내기 금지 — fact_check에도 적�
 [통째로 학습한 참고 채널들의 분석 — 원리만 응용, 제목·대사 복제 금지]
 {studies}
 
+[이번 영상의 시리즈(컨셉) — 채널은 과학교육 그대로, 이 영상은 아래 시리즈의 한 편]
+{concept}
+
 [이 채널의 제작 규칙(스타일 가이드) — 반드시 지킬 것]
 {style_guide}
 
@@ -209,7 +212,7 @@ def cps_for(channel=None):
     return float(config.load_settings()["production"]["chars_per_second"])
 
 
-def build_prompt(topic, instructions, minutes, features, channel=None, script_format="auto"):
+def build_prompt(topic, instructions, minutes, features, channel=None, script_format="auto", concept=None):
     cps = cps_for(channel)
     total = minutes * 60
     pb = learner.playbook()
@@ -224,6 +227,7 @@ def build_prompt(topic, instructions, minutes, features, channel=None, script_fo
         min_real=int(float(config.load_settings()["production"].get("min_real_ratio", 0.6)) * 100),
         studies=_studies((channel or {}).get("id")),
         visual_mix=_visual_mix(),
+        concept=(f"시리즈명: {concept['name']}\n" + (concept.get("rules") or "")) if concept else "(일반 편)",
         style_guide=(channel or {}).get("style_guide") or "(아직 없음)", instructions=("[추가 지시]\n" + instructions) if instructions else "", minutes=minutes,
         chars_min=int(total * cps * 0.85), chars_max=int(total * cps * 1.1),
         scenes_min=int(total / 10), scenes_max=int(total / 6),
@@ -324,12 +328,15 @@ def self_review(plan, channel, generate, minutes):
     return reviewed
 
 
-def make_plan(topic, instructions="", minutes=None, production_id=None, generate=None, channel=None, script_format=None):
+def make_plan(topic, instructions="", minutes=None, production_id=None, generate=None, channel=None, script_format=None,
+              concept=None):
     generate = generate or (lambda prompt: llm.generate_json(prompt, SYSTEM, production_id))
     minutes = minutes or (channel or {}).get("target_minutes") or config.load_settings()["production"]["target_minutes"]
     features, explored = learner.choose_features()
     script_format = script_format or config.load_settings()["production"].get("script_format", "auto")
-    prompt = build_prompt(topic, instructions, minutes, features, channel, script_format)
+    if concept and concept.get("format") in FORMATS and (not script_format or script_format == "auto"):
+        script_format = concept["format"]
+    prompt = build_prompt(topic, instructions, minutes, features, channel, script_format, concept)
     cps = cps_for(channel)
     plan = validate(generate(prompt), minutes, cps)
     if plan["_stats"]["chars"] < plan["_stats"]["target_chars"] * 0.85:

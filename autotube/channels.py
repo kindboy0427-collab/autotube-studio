@@ -25,34 +25,80 @@ PRESETS = [
 
 
 AI_RISK = {
+    "id": "ai_risk",
     "name": "AI 위험 분석",
-    "niches": ["AI 위험", "AI 안전 연구", "AI 일자리 변화", "AI 기술 원리", "초지능 시나리오", "반도체 AI 경쟁"],
-    "audience": "AI 뉴스에 불안과 호기심을 함께 느끼는 20~50대 직장인",
-    "tone": "공포가 아니라 분석: 차분하고 신뢰감 있는 다큐 내레이션, 데이터와 실제 연구로 말하기",
-    "style_guide": "\n".join([
+    "niches": ["AI 위험", "AI 안전 연구", "AI 일자리 변화", "초지능 시나리오"],
+    "format": "",
+    "rules": "\n".join([
         "- 포지션은 'AI 위험 분석가': '결국 멸망한다'처럼 단정하지 않는다. 위험의 근거와 통제 가능성을 함께 다룬다",
-        "- 모든 영상에 반대 의견(낙관론·회의론) 파트를 1개 이상 넣는다",
-        "- 실제 연구·실험·발표를 근거로 쓴다 (연구기관·논문·연도). 확실하지 않은 수치는 fact_check로",
-        "- 인물 인용은 확인된 발언만, 사진+자막 카드로. 방송·유튜브 인터뷰 클립은 쓰지 않는다",
-        "- 화면은 실제 자료 중심: 데이터센터·반도체 공정·연구소·로봇·관련 인물 사진, 원리는 도식으로",
-        "- 감정선: 불안으로 클릭 → 이해와 '우리가 할 수 있는 것'으로 마무리. 겁만 주고 끝내지 않는다",
-        "- 대본 틀은 반전 논제형 또는 단계형 시나리오를 우선 사용",
-        "- 제목은 질문형·통념 뒤집기, 낚시성 과장 금지 (영상 내용과 제목이 일치)",
-        "- 투자 추천처럼 들리는 표현 금지 (특정 종목·매수 언급 X)",
-        "- 끝인사 고정: 'AI가 바꾸는 세상, 오늘도 분석해 봤습니다'",
+        "- 반대 의견(낙관론·회의론) 파트를 반드시 1개 이상 넣는다",
+        "- 실제 연구·실험·발표를 근거로 (기관·논문·연도). 확실하지 않은 수치는 fact_check로",
+        "- 인물 인용은 확인된 발언만, 사진+자막 카드로",
+        "- 화면: 데이터센터·반도체 공정·연구소·로봇·관련 인물 사진 등 실제 자료 중심, 원리는 도식",
+        "- 감정선: 불안으로 클릭 → 이해와 '우리가 할 수 있는 것'으로 마무리",
+        "- 대본 틀은 반전 논제형 또는 단계형 시나리오 우선",
+        "- 투자 추천처럼 들리는 표현 금지",
     ]),
 }
 
 
-def apply_ai_risk_concept(cid="tech"):
-    """One-time switch of the tech channel to the 'AI 위험 분석' concept (keeps voice, YouTube login and old rules)."""
+def concepts(cid):
+    """Series/concepts inside a channel (the channel stays science-education; a concept is one series in it)."""
+    return db.kv_get("concepts:" + (cid or ""), []) or []
+
+
+def get_concept(cid, concept_id):
+    return next((c for c in concepts(cid) if c.get("id") == concept_id), None)
+
+
+def save_concept(cid, data):
+    items = concepts(cid)
+    cid_ = re.sub(r"[^a-z0-9_-]", "", (data.get("id") or "").lower())[:30] or db.new_id()[-6:]
+    niches = data.get("niches") or []
+    if isinstance(niches, str):
+        niches = [x.strip() for x in niches.split(",") if x.strip()]
+    item = {"id": cid_, "name": str(data.get("name") or cid_)[:40], "niches": niches[:10],
+            "rules": str(data.get("rules") or "")[:3000], "format": str(data.get("format") or "")}
+    items = [c for c in items if c.get("id") != cid_] + [item]
+    db.kv_set("concepts:" + (cid or ""), items)
+    return item
+
+
+def delete_concept(cid, concept_id):
+    db.kv_set("concepts:" + (cid or ""), [c for c in concepts(cid) if c.get("id") != concept_id])
+
+
+def migrate_ai_risk_to_concept(cid="tech"):
+    """v1.9.0 turned the whole tech channel into 'AI 위험 분석'. The owner wants it as ONE series inside the
+    science-education channel: restore the channel and add the series."""
     ch = get(cid)
     if not ch:
         return None
-    old = [ln for ln in (ch.get("style_guide") or "").splitlines() if ln.strip() and ln not in AI_RISK["style_guide"]]
-    guide = AI_RISK["style_guide"] + ("\n" + "\n".join(old) if old else "")
-    return save({"id": cid, "name": AI_RISK["name"], "niches": AI_RISK["niches"], "audience": AI_RISK["audience"],
-                 "tone": AI_RISK["tone"], "style_guide": "\n".join(guide.splitlines()[:25])})
+    preset = next(x for x in PRESETS if x["id"] == "tech")
+    old_rules = {ln for ln in OLD_AI_RISK_RULES}
+    guide = "\n".join(ln for ln in (ch.get("style_guide") or "").splitlines() if ln.strip() and ln not in old_rules)
+    if ch.get("name") == "AI 위험 분석":
+        save({"id": cid, "name": preset["name"], "niches": preset["niches"], "audience": preset["audience"],
+              "tone": preset["tone"], "style_guide": guide})
+    else:
+        save({"id": cid, "style_guide": guide})
+    if not get_concept(cid, "ai_risk"):
+        save_concept(cid, AI_RISK)
+    return get(cid)
+
+
+OLD_AI_RISK_RULES = [
+    "- 포지션은 'AI 위험 분석가': '결국 멸망한다'처럼 단정하지 않는다. 위험의 근거와 통제 가능성을 함께 다룬다",
+    "- 모든 영상에 반대 의견(낙관론·회의론) 파트를 1개 이상 넣는다",
+    "- 실제 연구·실험·발표를 근거로 쓴다 (연구기관·논문·연도). 확실하지 않은 수치는 fact_check로",
+    "- 인물 인용은 확인된 발언만, 사진+자막 카드로. 방송·유튜브 인터뷰 클립은 쓰지 않는다",
+    "- 화면은 실제 자료 중심: 데이터센터·반도체 공정·연구소·로봇·관련 인물 사진, 원리는 도식으로",
+    "- 감정선: 불안으로 클릭 → 이해와 '우리가 할 수 있는 것'으로 마무리. 겁만 주고 끝내지 않는다",
+    "- 대본 틀은 반전 논제형 또는 단계형 시나리오를 우선 사용",
+    "- 제목은 질문형·통념 뒤집기, 낚시성 과장 금지 (영상 내용과 제목이 일치)",
+    "- 투자 추천처럼 들리는 표현 금지 (특정 종목·매수 언급 X)",
+    "- 끝인사 고정: 'AI가 바꾸는 세상, 오늘도 분석해 봤습니다'",
+]
 
 
 def _row(r):
@@ -108,6 +154,8 @@ def all_niches():
     out = []
     for c in all_channels(active_only=True):
         out += [(n, c["id"]) for n in c["niches"]]
+        for k in concepts(c["id"]):
+            out += [(n, c["id"]) for n in k.get("niches", [])]
     return out
 
 

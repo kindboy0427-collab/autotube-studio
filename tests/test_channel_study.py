@@ -78,12 +78,21 @@ class Synth(TempHome):
 
 
 class Concept(TempHome):
-    def test_ai_risk_concept_keeps_voice_and_old_rules(self):
+    def test_ai_risk_is_a_series_inside_the_science_channel(self):
         from autotube import channels
-        channels.save({"id": "tech", "name": "기술·미래과학", "voice": {"engine": "gemini", "ref": "voice_me"},
-                       "style_guide": "- 배경음악은 작게"})
-        ch = channels.apply_ai_risk_concept("tech")
-        self.assertEqual(ch["name"], "AI 위험 분석")
-        self.assertIn("반대 의견", ch["style_guide"])
-        self.assertIn("배경음악은 작게", ch["style_guide"])
+        # state left by v1.9.0 (whole channel renamed)
+        channels.save({"id": "tech", "name": "AI 위험 분석", "niches": ["AI 위험"], "voice": {"engine": "gemini", "ref": "voice_me"},
+                       "style_guide": "\n".join(channels.OLD_AI_RISK_RULES + ["- 배경음악은 작게"])})
+        ch = channels.migrate_ai_risk_to_concept("tech")
+        self.assertEqual(ch["name"], "기술·미래과학")
+        self.assertEqual(ch["style_guide"], "- 배경음악은 작게")
         self.assertIn("voice_me", ch["voice"])
+        k = channels.get_concept("tech", "ai_risk")
+        self.assertEqual(k["name"], "AI 위험 분석")
+        self.assertIn(("AI 위험", "tech"), channels.all_niches())
+
+    def test_series_rules_reach_the_script_prompt(self):
+        k = {"name": "AI 위험 분석", "rules": "- 반대 의견 필수"}
+        p = planner.build_prompt("AI가 위험한 이유", "", 3, [], {"id": "tech", "name": "기술"}, "auto", k)
+        self.assertIn("시리즈명: AI 위험 분석", p)
+        self.assertIn("반대 의견 필수", p)
