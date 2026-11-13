@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
 """Real footage & photos from free, properly licensed archives (no YouTube rips, no TV clips).
 
-  Wikimedia Commons : photos + videos of real processes, labs, places, scientists (PD / CC0 / CC BY / CC BY-SA)
-  NASA Image and Video Library : space, rockets, Earth (mostly public domain)
+  NASA Image and Video Library : space, rockets, Earth (US federal works -> public domain in the US)
+  Wikimedia Commons : photos + videos of real processes, labs, places, scientists (PD / CC0 / CC BY / CC BY-SA),
+                      incl. mirrored NOAA / USGS / ESA (CC BY-SA IGO, credit required) collections
+  Internet Archive  : public-domain films (Prelinger archives, US government films) for history/industry shots
+
+Never used: NASA/agency logos & insignia (endorsement rules), non-free licenses (NC/ND).
 
 Every result carries author + license + source page -> written into the video description.
 """
@@ -26,6 +30,9 @@ def _clean(s):
     return html.unescape(re.sub(r"<[^>]+>", "", str(s or ""))).strip()[:120]
 
 
+LOGO_WORDS = ("logo", "insignia", "meatball", "emblem", "seal of", "wordmark", "patch")
+
+
 def _license_ok(name):
     n = (name or "").lower()
     return any(k in n for k in OK_LICENSES) and not any(re.search(rf"\b{b}\b", n) for b in BAD)
@@ -47,6 +54,8 @@ def commons_search(query, kind="image", limit=12):
         meta = ii.get("extmetadata") or {}
         lic = _clean((meta.get("LicenseShortName") or {}).get("value"))
         if not _license_ok(lic):
+            continue
+        if any(w in (p.get("title") or "").lower() for w in LOGO_WORDS):
             continue
         mime = ii.get("mime", "")
         if kind == "video" and not mime.startswith("video/"):
@@ -97,8 +106,38 @@ def nasa_asset(nasa_id, kind="video"):
     return pref[0].replace("http://", "https://") if pref else None
 
 
-def find_video(query, used, out_path, space=False):
-    """Real footage clip for a scene -> (path, credit)."""
+IA = "https://archive.org"
+
+
+def ia_search(query, limit=8):
+    """Internet Archive public-domain films (Prelinger + US government)."""
+    q = (f"({query}) AND mediatype:movies AND (collection:prelinger OR licenseurl:*publicdomain* "
+         f"OR collection:FedFlix OR collection:nasa)")
+    res = http.get_json(IA + "/advancedsearch.php", params={"q": q, "fl[]": ["identifier", "title", "creator", "licenseurl"],
+                                                             "rows": limit, "output": "json"}, timeout=30, retries=1)
+    out = []
+    for d in (res.get("response") or {}).get("docs", []):
+        out.append({"ia_id": d["identifier"], "title": d.get("title", ""), "author": (d.get("creator") or "Unknown") if
+                    isinstance(d.get("creator"), str) else ", ".join(d.get("creator") or [])[:80],
+                    "license": "Public domain",
+                    "page": f"{IA}/details/{d['identifier']}", "source": "Internet Archive"})
+    return out
+
+
+def ia_file(ia_id):
+    meta = http.get_json(f"{IA}/metadata/{ia_id}", timeout=30, retries=1)
+    files = meta.get("files") or []
+    mp4 = [f for f in files if str(f.get("name", "")).lower().endswith(".mp4")]
+    mp4.sort(key=lambda f: int(f.get("size") or 0))
+    small = [f for f in mp4 if 2_000_000 < int(f.get("size") or 0) < 300_000_000] or mp4
+    return f"{IA}/download/{ia_id}/{small[0]['name']}" if small else None
+
+
+AGENCY_HINTS = {"earth": ("NOAA", "USGS"), "space": ("NASA", "ESA")}
+
+
+def find_video(query, used, out_path, space=False, earth=False, history=False):
+    """Real footage clip for a scene -> (path, credit). Sources tried by topic."""
     cands = []
     if space:
         try:
@@ -107,22 +146,33 @@ def find_video(query, used, out_path, space=False):
             pass
     try:
         cands += commons_search(query, "video")
+        if earth:
+            for hint in AGENCY_HINTS["earth"]:
+                cands += commons_search(f"{query} {hint}", "video", limit=6)
     except Exception:
         pass
+    if history or not cands:
+        try:
+            cands += [dict(c, _ia=True) for c in ia_search(query)]
+        except Exception:
+            pass
     for c in cands:
         key = c.get("page")
         if key in used:
             continue
-        url = nasa_asset(c["nasa_id"], "video") if c.get("_nasa") else c["url"]
+        try:
+            url = nasa_asset(c["nasa_id"], "video") if c.get("_nasa") else ia_file(c["ia_id"]) if c.get("_ia") else c["url"]
+        except Exception:
+            continue
         if not url:
             continue
-        http.download(url, out_path, timeout=300)
+        http.download(url, out_path, timeout=600)
         used.add(key)
         return out_path, {k: c.get(k) for k in ("source", "author", "license", "page", "title")}
     raise ArchiveError(f"실제 자료 영상 없음: {query}")
 
 
-def find_photo(query, used, out_path, space=False):
+def find_photo(query, used, out_path, space=False, earth=False, history=False):
     cands = []
     if space:
         try:
@@ -131,6 +181,9 @@ def find_photo(query, used, out_path, space=False):
             pass
     try:
         cands += commons_search(query, "image")
+        if earth:
+            for hint in AGENCY_HINTS["earth"]:
+                cands += commons_search(f"{query} {hint}", "image", limit=6)
     except Exception:
         pass
     for c in cands:

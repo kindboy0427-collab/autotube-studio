@@ -75,3 +75,15 @@ class Synth(TempHome):
     def test_synthesize_needs_studies(self):
         with self.assertRaises(ValueError):
             channel_study.synthesize("", generate=lambda p: {})
+
+
+class Concept(TempHome):
+    def test_ai_risk_concept_keeps_voice_and_old_rules(self):
+        from autotube import channels
+        channels.save({"id": "tech", "name": "기술·미래과학", "voice": {"engine": "gemini", "ref": "voice_me"},
+                       "style_guide": "- 배경음악은 작게"})
+        ch = channels.apply_ai_risk_concept("tech")
+        self.assertEqual(ch["name"], "AI 위험 분석")
+        self.assertIn("반대 의견", ch["style_guide"])
+        self.assertIn("배경음악은 작게", ch["style_guide"])
+        self.assertIn("voice_me", ch["voice"])

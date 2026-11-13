@@ -205,7 +205,7 @@ class RealFootageAndManualImages(TempHome):
                 return p
 
             @staticmethod
-            def archive_video(q, used, out, space=False):
+            def archive_video(q, used, out, **kw):
                 ff(["-f", "lavfi", "-i", "testsrc=size=640x360:rate=24:duration=1", "-pix_fmt", "yuv420p", out])
                 return out, {"source": "Wikimedia Commons", "author": "Fab Lab", "license": "CC BY-SA 4.0", "page": "https://c/1"}
 
@@ -280,3 +280,28 @@ class RealRatio(TempHome):
         plan = planner.make_plan("반도체", minutes=1, generate=gen)
         self.assertTrue(any("실제 자료(real/person) 장면이" in c for c in calls))
         self.assertTrue(all(s["visual"]["source"] == "real" for s in plan["scenes"]))
+
+
+class MultiCut(TempHome):
+    def test_long_real_scene_gets_two_shots(self):
+        config.save_settings({"production": {"resolution": "640x360", "fps": 24, "voice_check": False, "multi_cut_seconds": 1.0}})
+        got = []
+
+        class P(FakeProviders):
+            @staticmethod
+            def plan(topic, instructions, minutes, production_id=None, channel=None, script_format=None):
+                p = FakeProviders.plan(topic, instructions, minutes)
+                for s in p["scenes"]:
+                    s["visual"]["source"] = "real"
+                return p
+
+            @staticmethod
+            def archive_video(q, used, out, **kw):
+                got.append(out)
+                ff(["-f", "lavfi", "-i", "testsrc=size=640x360:rate=24:duration=1", "-pix_fmt", "yuv420p", out])
+                return out, {"source": "NASA", "author": "NASA", "license": "Public domain (NASA)", "page": out}
+        pid = producer.create("우주", "", 1)
+        db.kv_set("imgsrc:" + pid, "ai")
+        self.assertEqual(producer.run(pid, P), "ready")
+        self.assertEqual(len(got), 12)  # 6 scenes x 2 shots
+        self.assertIn("NASA", (config.OUTPUT / pid / "description.txt").read_text(encoding="utf-8"))

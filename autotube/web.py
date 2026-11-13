@@ -28,6 +28,12 @@ async def lifespan(app):
     config.ensure_dirs()
     db.init()
     watcher.seed_references()
+    if not db.kv_get("concept_ai_risk_v1"):  # owner chose the 'AI 위험 분석' concept for the tech channel (2026-11-13)
+        try:
+            channels.apply_ai_risk_concept("tech")
+        except Exception:
+            pass
+        db.kv_set("concept_ai_risk_v1", True)
     if not getattr(app.state, "no_background", False):
         WORKER.start()
         SCHED.start()

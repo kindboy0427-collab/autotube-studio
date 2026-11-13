@@ -156,7 +156,14 @@ def _space(channel, plan):
     return any(w in words for w in ("우주", "천문", "space", "nasa", "로켓", "행성", "블랙홀", "은하"))
 
 
-def _visual(pid, s, i, d, folder, used, providers, credits, manual=False, out=None, space=False):
+def _topic_flags(channel, plan):
+    words = " ".join((channel or {}).get("niches", []) + [plan.get("title", ""), (channel or {}).get("name", "")]).lower()
+    return {"space": _space(channel, plan),
+            "earth": any(w in words for w in ("지구", "기후", "날씨", "바다", "해양", "지진", "화산", "태풍", "빙하", "earth", "climate")),
+            "history": any(w in words for w in ("역사", "과학사", "발명", "과학자", "history", "냉전", "원자", "핵"))}
+
+
+def _visual(pid, s, i, d, folder, used, providers, credits, manual=False, out=None, space=False, flags=None):
     """Produce the raw visual for scene i with a fallback chain; returns (kind, path)."""
     kind = s["visual"]["type"]
     prompt = s["visual"].get("prompt", "")
@@ -198,7 +205,7 @@ def _visual(pid, s, i, d, folder, used, providers, credits, manual=False, out=No
                 p = str(folder / f"s{i:03d}_{'archive' if k == 'archive_video' else 'stock'}.mp4")
                 if not Path(p).exists():
                     if k == "archive_video":
-                        _, meta = providers.archive_video(q, used, p, space=space)
+                        _, meta = providers.archive_video(q, used, p, **(flags or {"space": space}))
                     else:
                         _, meta = providers.stock_video(q, d, used, p)
                     credits.append(meta)
@@ -209,7 +216,7 @@ def _visual(pid, s, i, d, folder, used, providers, credits, manual=False, out=No
                     if k == "person_photo":
                         _, meta = providers.person_photo(s["visual"].get("person", ""), used, p)
                     elif k == "archive_photo":
-                        _, meta = providers.archive_photo(q, used, p, space=space)
+                        _, meta = providers.archive_photo(q, used, p, **(flags or {"space": space}))
                     else:
                         _, meta = providers.stock_photo(q, used, p)
                     credits.append(meta)
@@ -415,16 +422,37 @@ def run(pid, providers=Providers):
                           f"{', '.join(f'{n:02d}' for n in missing[:30])}). 넣은 뒤 [이미지 넣었어요 → 계속]")
                 _set(pid, status="waiting_images")
                 return "waiting_images"
-        space = _space(channel, plan)
+        flags = _topic_flags(channel, plan)
+        space = flags["space"]
         used, credits, clips, kinds = set(), [], [], {}
         for i, sc in enumerate(scenes):
             d = sc["_voice"]["duration"] + 0.35 + (float(ps.get("emphasis_pause_seconds", 1.2)) if sc.get("pause_after") else 0)
             sc["_dur"] = d
             clip = work / f"s{i:03d}_clip.mp4"
             if not clip.exists():
-                kind, raw = _visual(pid, sc, i, d, work, used, providers, credits, manual=manual, out=out, space=space)
+                kind, raw = _visual(pid, sc, i, d, work, used, providers, credits, manual=manual, out=out, space=space, flags=flags)
                 tmp = work / f"s{i:03d}_base.mp4"
-                if kind in ("ai_video", "stock_video"):
+                second = None
+                if kind == "stock_video" and sc["visual"].get("type") == "real" and d >= float(ps.get("multi_cut_seconds", 6.5)):
+                    # long real scene -> two different real shots (faster, more documentary-like cutting)
+                    try:
+                        p2 = str(work / f"s{i:03d}_archive2.mp4")
+                        if not Path(p2).exists():
+                            q2 = sc["visual"].get("stock_query") or sc["visual"].get("prompt", "")[:40]
+                            try:
+                                _, m2 = providers.archive_video(q2, used, p2, **flags)
+                            except Exception:
+                                _, m2 = providers.stock_video(q2, d / 2, used, p2)
+                            credits.append(m2)
+                        second = p2
+                    except Exception:
+                        second = None
+                if kind in ("ai_video", "stock_video") and second:
+                    a, b = work / f"s{i:03d}_partA.mp4", work / f"s{i:03d}_partB.mp4"
+                    media.video_clip(raw, d / 2, str(a))
+                    media.video_clip(second, d - d / 2, str(b))
+                    media.concat([str(a), str(b)], str(tmp), str(work / f"s{i:03d}_parts.txt"))
+                elif kind in ("ai_video", "stock_video"):
                     media.video_clip(raw, d, str(tmp))
                 elif kind in ("ai_image", "stock_photo"):
                     media.image_clip(raw, d, str(tmp), motion=i)
