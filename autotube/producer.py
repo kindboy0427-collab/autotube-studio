@@ -13,6 +13,7 @@ Steps (each scene asset is cached on disk, so '다시 시도' resumes where it s
 from __future__ import annotations
 import json
 import queue
+import re
 import threading
 import traceback
 from pathlib import Path
@@ -230,6 +231,28 @@ def _visual(pid, s, i, d, folder, used, providers, credits, manual=False, out=No
             errors.append(f"{k}: {str(ex)[:100]}")
     _log(pid, f"장면 {i + 1} 시각자료 실패 → 제목 카드 사용 ({'; '.join(errors)[:300]})")
     return "card", None
+
+
+def explain(ex):
+    """Plain-Korean reason + what to do, for the production list and the activity log."""
+    m = f"{type(ex).__name__}: {ex}"
+    rules = [
+        ("prepayment credits are depleted", "Gemini 선불 크레딧이 다 떨어졌습니다 → AI Studio(aistudio.google.com) 결제에서 충전하면 [이어서 다시 시도]로 계속됩니다"),
+        ("402", "결제가 필요한 서비스가 거절했습니다(크레딧 부족) → 해당 서비스 결제 확인"),
+        ("Invalid API key", "API 키가 잘못됐습니다 → 설정 → API 키에서 다시 넣어주세요"),
+        ("401", "API 키 인증 실패 → 설정 → API 키 확인"),
+        ("Color spaces", "영상 자료 하나의 색 형식을 변환하지 못했습니다 → [이어서 다시 시도]하면 그 장면만 다른 방식으로 만듭니다"),
+        ("하루 요청 한도", "음성 하루 한도 소진 → 한도 초기화 후 자동으로 이어서 제작"),
+        ("429", "요청이 너무 많아 잠시 막혔습니다 → 잠시 후 [이어서 다시 시도]"),
+        ("No space left", "디스크 공간이 부족합니다 → C/F 드라이브 여유 공간 확인"),
+        ("렌더 길이 이상", "영상이 중간에 잘려서 업로드를 막았습니다 → [이어서 다시 시도]"),
+        ("TTSError", "내레이션(목소리) 만들기 실패 → 음성 서비스 키·크레딧 확인 후 [이어서 다시 시도]"),
+        ("BudgetExceeded", "설정한 예산 한도에 걸려 멈췄습니다 → 설정의 1편/하루/월 예산 확인"),
+    ]
+    for key, msg in rules:
+        if key in m:
+            return msg
+    return "예상하지 못한 오류 → [이어서 다시 시도], 반복되면 작업 기록의 원문을 확인"
 
 
 def _qa_scenes(pid, scenes, work):
@@ -507,8 +530,16 @@ def run(pid, providers=Providers):
             mp3 = work / f"s{i:03d}_voice.mp3"
             raw = work / f"s{i:03d}_voice_raw.mp3"
             use = accent_voice if (accent_voice and sc.get("importance", 1) >= 3) else main_voice
-            _, words, engine = providers.tts(sc["narration"], str(raw), production_id=pid, voice=use,
-                                             style=tts.style_for(sc.get("emotion", ""), tone))
+            ctx = (" ".join(x["narration"] for x in scenes[max(0, i - 2):i]),
+                   " ".join(x["narration"] for x in scenes[i + 1:i + 3]))
+            try:
+                _, words, engine = providers.tts(sc["narration"], str(raw), production_id=pid, voice=use,
+                                                 style=tts.style_for(sc.get("emotion", ""), tone), context=ctx)
+            except TypeError:  # test doubles without the context argument
+                _, words, engine = providers.tts(sc["narration"], str(raw), production_id=pid, voice=use,
+                                                 style=tts.style_for(sc.get("emotion", ""), tone))
+            if re.search(r"\d", sc["narration"]):
+                words = []  # numbers were read out in words -> subtitles are re-timed from the original text (digits stay digits)
             try:
                 voicecheck.normalize(raw, mp3)  # same loudness in every scene
             except Exception:
@@ -585,12 +616,21 @@ def run(pid, providers=Providers):
             sc["_dur"] = sc["_voice"]["duration"] + 0.35 + (float(ps.get("emphasis_pause_seconds", 1.2)) if sc.get("pause_after") else 0)
 
         def build(i, sc):
+            try:
+                return _build(i, sc)
+            except Exception as ex:  # one bad source file must not stop the whole video
+                _log(pid, f"장면 {i + 1} 화면 만들기 실패 → 제목 카드로 대체 ({explain(ex)})")
+                clip = work / f"s{i:03d}_clip.mp4"
+                media.color_clip(sc["_dur"], str(clip), text=sc.get("on_screen_text") or plan["title"])
+                return str(clip)
+
+        def _build(i, sc):
             """One scene's clip. Scenes are built in parallel: footage search and AI checks are network-bound."""
             d = sc["_dur"]
             clip = work / f"s{i:03d}_clip.mp4"
             if clip.exists():
                 try:  # a half-written clip from a crashed run would silently cut the whole video there
-                    ok = media.duration(clip) >= d * 0.8
+                    ok = abs(media.duration(clip) - d) <= 0.25  # same length as THIS narration (a new voice changes it)
                 except Exception:
                     ok = False
                 if not ok:
@@ -785,9 +825,9 @@ def run(pid, providers=Providers):
         db.event("warn", "produce", f"{pid}: {ex}")
         return "waiting_quota"
     except Exception as ex:
-        _set(pid, status="failed", error=f"{type(ex).__name__}: {str(ex)[:500]}")
+        _set(pid, status="failed", error=explain(ex) + f"  [원문: {type(ex).__name__}: {str(ex)[:300]}]")
         _log(pid, "오류: " + traceback.format_exc()[-1200:])
-        db.event("error", "produce", f"{pid} 실패: {str(ex)[:300]}")
+        db.event("error", "produce", f"{pid} 실패: {explain(ex)}")
         return "failed"
 
 

@@ -44,12 +44,22 @@ def _frames(path, kind):
 def score(path, narration, want, kind="video", person="", production_id=None):
     """0-10, or None when the check could not run."""
     s = config.load_settings()
-    if not s["production"].get("footage_fit_check", True) or not config.get_secret("GEMINI_API_KEY"):
+    if not s["production"].get("footage_fit_check", True):
         return None
+    engine = s["production"].get("footcheck_engine", "claude")
     try:
         imgs = _frames(path, kind)
         if not imgs:
             return 0
+        if engine == "claude" or not s["providers"].get("gemini_paid_allowed", False):
+            from . import subscription
+            txt = subscription.run_claude_vision(
+                PROMPT.format(narr=narration[:400], want=(want or "")[:300],
+                              person=f"The scene is about this person: {person}" if person else ""),
+                imgs, production_id)
+            return float(http.parse_json_loose(txt).get("score", 0))
+        if not config.get_secret("GEMINI_API_KEY"):
+            return None
         parts = [{"text": PROMPT.format(narr=narration[:400], want=(want or "")[:300],
                                         person=f"The scene is about this person: {person}" if person else "")}]
         parts += [{"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(b).decode()}} for b in imgs]

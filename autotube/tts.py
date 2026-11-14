@@ -273,6 +273,8 @@ def gemini(text, out_path, production_id=None, voice_id=None, style=""):
     key = config.get_secret("GEMINI_API_KEY")
     if not key:
         raise TTSError("GEMINI_API_KEY 없음")
+    if not pv.get("gemini_paid_allowed", False):
+        raise TTSError("유료 Gemini 사용이 꺼져 있습니다 (추가 결제 방지)")
     voice = voice_id or pv["gemini_tts_voice"]
     est_min = len(text) / s["production"]["chars_per_second"] / 60
     budget.check(est_min * s["prices"]["gemini_tts_per_minute"], production_id)
@@ -353,16 +355,25 @@ def _words_from_chars(chars, starts, ends):
     return words
 
 
-def elevenlabs(text, out_path, production_id=None, voice_id=None, style=""):
+def elevenlabs(text, out_path, production_id=None, voice_id=None, style="", prev_text="", next_text=""):
     s = config.load_settings()
     pv = dict(s["providers"])
     if voice_id:
         pv["elevenlabs_voice_id"] = voice_id
     cost = len(text) / 1000 * s["prices"]["elevenlabs_per_kchar"]
     budget.check(cost, production_id)
+    vs = pv.get("elevenlabs_voice_settings") or {}
+    body = {"text": text, "model_id": pv["elevenlabs_model"],
+            # stable, faithful to the cloned voice, no exaggerated 'style' (that is what sounds AI-made)
+            "voice_settings": {"stability": vs.get("stability", 0.6), "similarity_boost": vs.get("similarity_boost", 0.9),
+                               "style": vs.get("style", 0.0), "use_speaker_boost": vs.get("use_speaker_boost", True)}}
+    # request stitching: the scene is read knowing what was said before and after -> one continuous narration
+    if prev_text:
+        body["previous_text"] = prev_text[-800:]
+    if next_text:
+        body["next_text"] = next_text[:800]
     res = http.post_json(f"https://api.elevenlabs.io/v1/text-to-speech/{pv['elevenlabs_voice_id']}/with-timestamps",
-                         {"text": text, "model_id": pv["elevenlabs_model"],
-                          "voice_settings": {"stability": 0.45, "similarity_boost": 0.8, "style": 0.2}},
+                         body,
                          headers={"xi-api-key": config.get_secret("ELEVENLABS_API_KEY")},
                          params={"output_format": "mp3_44100_128"}, timeout=300)
     audio = res.get("audio_base64")
@@ -444,7 +455,12 @@ def parse_voice(value):
     return {"engine": "elevenlabs", "ref": v}
 
 
-def synthesize(text, out_path, production_id=None, order=None, voice_id=None, voice=None, style=""):
+def synthesize(text, out_path, production_id=None, order=None, voice_id=None, voice=None, style="", context=None):
+    if re.search(r"[가-힣]", text or "") and config.load_settings()["production"].get("spoken_numbers", True):
+        from .spoken import to_spoken_ko
+        text = to_spoken_ko(text)  # "99.9%" -> "구십구 점 구 퍼센트": no digit-by-digit or English reading
+        if context:
+            context = tuple(to_spoken_ko(c) for c in context)
     """voice: {"engine","ref"}. With production.voice_fallback='same_voice' a chosen voice never
     silently switches to another engine/voice mid-video (the step fails and '다시 시도' resumes)."""
     voice = parse_voice(voice) if voice else (parse_voice(voice_id) if voice_id else None)
@@ -457,6 +473,8 @@ def synthesize(text, out_path, production_id=None, order=None, voice_id=None, vo
     for name in order or choose():
         try:
             kw = {"style": style}
+            if name == "elevenlabs" and context:
+                kw["prev_text"], kw["next_text"] = context
             if voice and name == voice["engine"] and voice.get("ref"):
                 kw["voice_id"] = voice["ref"]
             path, words = PROVIDERS[name](text, out_path, production_id, **kw)

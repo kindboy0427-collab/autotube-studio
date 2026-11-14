@@ -67,7 +67,12 @@ def video_clip(src, seconds, out):
     w, h = _wh()
     fps = _fps()
     vf = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},fps={fps},setsar=1,format=yuv420p"
-    run(["-stream_loop", "-1", "-i", src, "-t", f"{seconds:.3f}", "-vf", vf, *VENC, "-an", out])
+    try:
+        run(["-stream_loop", "-1", "-i", src, "-t", f"{seconds:.3f}", "-vf", vf, *VENC, "-an", out])
+    except MediaError:
+        # RGB/ProRes-4444 style sources with no colour-space tag: declare bt709 and convert explicitly
+        vf2 = "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709,format=yuv444p," + vf
+        run(["-stream_loop", "-1", "-i", src, "-t", f"{seconds:.3f}", "-vf", vf2, *VENC, "-an", out])
     return out
 
 

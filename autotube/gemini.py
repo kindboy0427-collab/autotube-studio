@@ -26,6 +26,9 @@ def _key():
 
 
 def _headers():
+    """Paid key. Blocked unless the owner allowed paid Gemini (settings providers.gemini_paid_allowed)."""
+    if not config.load_settings()["providers"].get("gemini_paid_allowed", False):
+        raise GeminiError("유료 Gemini 사용이 꺼져 있습니다 (추가 결제 방지). 설정에서 허용해야 사용됩니다")
     return {"x-goog-api-key": _key()}
 
 

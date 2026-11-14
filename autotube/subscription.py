@@ -121,3 +121,37 @@ def run_codex(prompt: str, system: str = "", production_id=None, timeout=1200, r
         raise SubscriptionError("Codex 실행 실패: " + ((p.stderr or p.stdout or "")[-300:] or "빈 응답"))
     budget.record("codex_subscription", len(full) + len(text), 0.0, "ChatGPT Plus (Codex)", production_id)
     return text
+
+
+def run_claude_vision(prompt: str, images, production_id=None, timeout=300, runner=subprocess.run) -> str:
+    """Claude Pro looks at a few JPEG frames (Claude Code reads the files) - no API cost."""
+    exe = _bin("claude")
+    if not exe:
+        raise SubscriptionError("Claude Code 미설치")
+    if (db.kv_get("cooldown:claude_code") or "") > dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"):
+        raise SubscriptionLimit("claude_code: 요금제 사용량 한도로 쉬는 중")
+    env = _clean_env(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"])
+    with tempfile.TemporaryDirectory(prefix="autotube_vision_") as tmp:
+        names = []
+        for k, b in enumerate(images):
+            n = f"frame{k}.jpg"
+            with open(os.path.join(tmp, n), "wb") as f:
+                f.write(b)
+            names.append(n)
+        task = (prompt + " First open these image files with the Read tool: " + ", ".join(names)
+                + ". Then answer with the JSON only.")
+        args = [exe, "-p", task, "--output-format", "json", "--max-turns", str(len(names) + 2),
+                "--allowedTools", "Read"]
+        p = runner(args, cwd=tmp, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                   timeout=timeout, stdin=subprocess.DEVNULL)
+    raw = (p.stdout or "").strip()
+    try:
+        data = json.loads(raw) if raw else {}
+    except ValueError:
+        data = {}
+    text = data.get("result") if isinstance(data, dict) else None
+    if p.returncode != 0 or data.get("is_error") or not text:
+        _check_limit("claude_code", (p.stderr or "") + raw)
+        raise SubscriptionError("Claude 화면 검수 실패: " + ((p.stderr or raw)[-200:] or "빈 응답"))
+    budget.record("claude_subscription", len(task) + len(text), 0.0, "Claude Pro 화면 검수", production_id)
+    return text

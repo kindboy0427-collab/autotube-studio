@@ -63,6 +63,7 @@ DEFAULTS = {
         "vecteezy_downloads_per_month": 490,  # stay under the free 500/month
         "vecteezy_plan": "free",         # free | payg ($1 per download)
         "music_source": "library",      # library (free tracks in assets/music) | elevenlabs (paid)
+        "footcheck_engine": "claude",    # claude (Claude Pro subscription, no extra cost) | gemini (paid)
         "footage_fit_check": True,       # AI looks at each real/stock/CC clip and rejects footage that doesn't match the narration
         "footage_min_score": 6,          # 0-10
         "footage_tries": 3,              # candidates checked per source before moving to the next source
@@ -100,7 +101,8 @@ DEFAULTS = {
         "script": "auto",                # auto: Claude Pro(Claude Code) > ChatGPT Plus(Codex) > OpenAI API > Gemini API
         "tts": "auto",                   # auto(Gemini TTS > ElevenLabs > OpenAI > edge) / gemini / elevenlabs / openai / edge
         "gemini_tts_model": "gemini-3.8-flash-tts",      # GA 2026-09; flash-lite-tts is cheaper
-        "gemini_tts_daily_limit": 100,                   # requests/day per model on Tier 1 (shown on the dashboard)
+        "gemini_tts_daily_limit": 100,
+        "gemini_paid_allowed": False,                    # owner must switch this on: no surprise Gemini bills                   # requests/day per model on Tier 1 (shown on the dashboard)
         "gemini_tts_voice": "Kore",                       # prebuilt voice, or a voice_... id (your replicated voice)
         "gemini_text_model": "gemini-3.8-flash",
         "gemini_watch_model": "gemini-3.8-flash",

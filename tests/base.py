@@ -23,6 +23,7 @@ class TempHome(unittest.TestCase):
             p.start()
         config.ensure_dirs()
         db.init()
+        config.save_settings({"providers": {"gemini_paid_allowed": True}})  # tests exercise the Gemini code paths with fakes
 
     def tearDown(self):
         for p in reversed(self._patches):
