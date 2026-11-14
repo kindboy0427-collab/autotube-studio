@@ -209,11 +209,12 @@ $('btnAdd').onclick = async () => {
 function fillSettings() {
   const s = S.settings, k = S.keys;
   $('keys').innerHTML = Object.entries(k).map(([name, v]) => `<label>${esc(v.label)} ${v.set ? (v.from_env ? '✓ 환경변수' : '✓ 저장됨') : '— 없음'}</label>
-    <input type="password" data-key="${esc(name)}" placeholder="${esc(name)}" autocomplete="off">`).join('');
+    <input type="text" class="secret" data-key="${esc(name)}" placeholder="${esc(name)}" autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore name="k_${esc(name)}_${Date.now()}">`).join('');
   $('niches').value = (s.learning.niches || []).join(', ');
   $('maxWatch').value = s.learning.max_watch_per_day;
   $('paidTier').value = String(!!s.learning.gemini_paid_tier);
   $('maxVideo').value = s.production.max_ai_video_clips;
+  $('visStyle').value = s.production.visual_style || 'photo'; $('maxShot').value = s.production.max_shot_seconds || 4;
   $('imgRatio').value = s.production.ai_image_ratio;
   $('perVideo').value = s.production.max_cost_per_video_usd;
   $('daily').value = s.budget.daily_usd; $('monthly').value = s.budget.monthly_usd;
@@ -227,13 +228,13 @@ function fillSettings() {
 }
 $('btnKeys').onclick = async () => {
   const vals = {}; document.querySelectorAll('[data-key]').forEach(i => { if (i.value.trim()) vals[i.dataset.key] = i.value.trim() });
-  const r = await post('/api/secrets', vals); await loadStatus(); fillSettings();
+  const r = await post('/api/secrets', vals); if (r.rejected && r.rejected.length) alert('저장 안 함 (키 형식이 아님 — 브라우저가 비밀번호를 자동으로 채웠을 수 있습니다): ' + r.rejected.join(', ')); await loadStatus(); fillSettings();
   alert(r.gemini_check ? (r.gemini_check.ok ? '저장했습니다. Gemini 키 확인: 정상 ✓' : 'Gemini 키가 올바르지 않습니다: ' + r.gemini_check.message + '\n\naistudio.google.com/apikey 에서 키를 다시 복사해 붙여넣으세요.') : '저장했습니다');
 };
 $('btnSettings').onclick = async () => {
   await post('/api/settings', {
     learning: {niches: $('niches').value.split(',').map(x => x.trim()).filter(Boolean), max_watch_per_day: +$('maxWatch').value, gemini_paid_tier: $('paidTier').value === 'true'},
-    production: {max_ai_video_clips: +$('maxVideo').value, ai_image_ratio: +$('imgRatio').value, max_cost_per_video_usd: +$('perVideo').value, auto_upload_private: $('autoUp').value === 'true'},
+    production: {max_ai_video_clips: +$('maxVideo').value, visual_style: $('visStyle').value, max_shot_seconds: +$('maxShot').value, ai_image_ratio: +$('imgRatio').value, max_cost_per_video_usd: +$('perVideo').value, auto_upload_private: $('autoUp').value === 'true'},
     budget: {daily_usd: +$('daily').value, monthly_usd: +$('monthly').value},
     update: {auto: $('autoUpd').value === 'true'},
     providers: {script: $('scriptP').value, tts: $('ttsP').value, elevenlabs_voice_id: $('voiceId').value.trim(), gemini_tts_voice: $('gVoice').value.trim() || 'Kore'}

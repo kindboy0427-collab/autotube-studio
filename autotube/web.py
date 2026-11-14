@@ -550,8 +550,18 @@ def _test_gemini_key():
 @app.post("/api/secrets")
 async def save_secrets(request: Request):
     data = await request.json()
+    # a browser password manager can silently fill these fields: never store something that isn't a key
+    pat = {"GEMINI_API_KEY": r"(AIza[\w-]{30,}|AQ\.[\w.-]{20,})", "GEMINI_FREE_API_KEY": r"(AIza[\w-]{30,}|AQ\.[\w.-]{20,})",
+           "YOUTUBE_API_KEY": r"AIza[\w-]{30,}", "PEXELS_API_KEY": r"[\w]{30,}", "PIXABAY_API_KEY": r"\d+-[0-9a-f]{20,}"}
+    rejected = []
+    for k, rx in pat.items():
+        v = str(data.get(k) or "").strip()
+        if v and not re.fullmatch(rx, v):
+            rejected.append(k)
+            data.pop(k, None)
     config.set_secrets(data)
     out = config.secret_status()
+    out["rejected"] = rejected
     if data.get("GEMINI_API_KEY"):
         out["gemini_check"] = _test_gemini_key()
     return out

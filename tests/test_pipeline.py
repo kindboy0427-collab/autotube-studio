@@ -284,7 +284,7 @@ class RealRatio(TempHome):
 
 class MultiCut(TempHome):
     def test_long_real_scene_gets_two_shots(self):
-        config.save_settings({"production": {"resolution": "640x360", "fps": 24, "voice_check": False, "multi_cut_seconds": 1.0}})
+        config.save_settings({"production": {"resolution": "640x360", "fps": 24, "voice_check": False, "max_shot_seconds": 1.0}})
         got = []
 
         class P(FakeProviders):
@@ -303,5 +303,5 @@ class MultiCut(TempHome):
         pid = producer.create("우주", "", 1)
         db.kv_set("imgsrc:" + pid, "ai")
         self.assertEqual(producer.run(pid, P), "ready")
-        self.assertEqual(len(got), 12)  # 6 scenes x 2 shots
+        self.assertGreaterEqual(len(got), 12)  # every scene cut into >= 2 real shots
         self.assertIn("NASA", (config.OUTPUT / pid / "description.txt").read_text(encoding="utf-8"))

@@ -91,7 +91,9 @@ def watch_youtube(url: str, prompt: str, duration_seconds: int = 0, model: str |
     cost = 0.0 if free_key_set() else est_tokens / 1e6 * s["prices"]["gemini_watch_per_mtok"]
     budget.check(cost)
     body = {"model": model, "input": [{"type": "text", "text": prompt}, {"type": "video", "uri": url}]}
-    res = http.post_json(BASE + "/interactions", body, headers=_learning_headers(), timeout=900, retries=1)
+    # retries=0: on the free tier every attempt (even a failed one) can use one of the ~20 daily requests
+    res = http.post_json(BASE + "/interactions", body, headers=_learning_headers(), timeout=900,
+                         retries=0 if free_key_set() else 1)
     text = _texts_from_interaction(res)
     if not text.strip():
         raise GeminiError("영상 분석 결과가 비어 있습니다")

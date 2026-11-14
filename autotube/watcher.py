@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import random
+import re
 
 from . import config, db, gemini, http, transcripts, youtube_data
 
@@ -243,11 +244,25 @@ def watch_next(n=None, watcher=None, transcript_watcher=None) -> int:
     mode = s.get("watch_mode", "auto")
     transcript_watcher = transcript_watcher or transcripts.watch_via_transcript
     full_limit = int(s.get("gemini_full_watch_per_day", 10))
-    if gemini.free_key_set():  # free tier: watch fully until the free daily hours run out
+    free = gemini.free_key_set()
+    if free:
+        # free tier = ~20 requests/day per model (reset at midnight US Pacific), failed attempts included.
+        # Spend them only on full watches, never hammer after the quota is gone.
+        from . import tts
+        qday = tts.quota_day()
+        if db.kv_get("free_watch_blocked:" + qday):
+            return 0
         full_limit = 10 ** 6
+        free_cap = int(s.get("free_watch_requests_per_day", 18))
     for v in _pick_queue(n):
         use = watcher
-        over = ((gemini.free_key_set() or not s.get("gemini_paid_tier"))
+        if free and watcher is gemini.watch_youtube:
+            used = int(db.kv_get("free_watch_req:" + qday, 0) or 0)
+            if used >= free_cap:
+                db.event("info", "watch", f"무료 시청 오늘 {used}회 사용 → 한도 초기화(오후 5시경) 후 이어서 시청")
+                break
+            db.kv_set("free_watch_req:" + qday, used + 1)
+        over = (not free and not s.get("gemini_paid_tier")
                 and watched_seconds_today() + (v.get("duration_seconds") or 0) > s["free_tier_watch_hours"] * 3600)
         captions_ok = _transcript_ok() or transcript_watcher is not transcripts.watch_via_transcript
         if mode == "hybrid":
@@ -269,10 +284,19 @@ def watch_next(n=None, watcher=None, transcript_watcher=None) -> int:
             count += 1
         except Exception as ex:
             msg = str(ex)[:300]
+            body = getattr(ex, "body", "") or ""
+            if free and getattr(ex, "status", None) == 429 and re.search(r"per[_ ]?day|PerDay", body, re.I):
+                # daily quota gone: keep the video queued, stop until the reset (no retry loop)
+                db.kv_set("free_watch_blocked:" + qday, True)
+                db.execute("UPDATE videos SET error=? WHERE id=?", ("무료 하루 한도 소진 → 내일 시청", v["id"]))
+                db.event("info", "watch", "Gemini 무료 시청 하루 한도 소진 → 한도 초기화(오후 5시경) 후 이어서 시청")
+                break
+            tries = int(db.kv_get("watch_fail:" + v["id"], 0) or 0) + 1
+            db.kv_set("watch_fail:" + v["id"], tries)
+            permanent = "형식" in msg or any(f"HTTP {c}" in msg for c in (400, 403, 404)) or tries >= 2
             db.execute("UPDATE videos SET status=?, error=? WHERE id=?",
-                       ("failed" if "형식" in msg or any(f"HTTP {c}" in msg for c in (400, 403, 404)) else "queued",
-                        msg, v["id"]))
-            db.event("warn", "watch", f"{v['id']} 분석 실패: {msg}")
+                       ("failed" if permanent else "queued", msg, v["id"]))
+            db.event("warn", "watch", f"{v['id']} 분석 실패: {msg}" + (" → 건너뜀" if permanent else " → 한 번만 다시 시도"))
             if "BudgetExceeded" in type(ex).__name__ or "예산" in msg:
                 break
     if count:

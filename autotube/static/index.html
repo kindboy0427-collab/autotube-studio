@@ -182,6 +182,8 @@
         <h3>제작 기본값</h3>
         <div class="row">
           <div><label>AI 영상 클립 수/편</label><input id="maxVideo" type="number" min="0" max="40"></div>
+          <div><label>그림체</label><select id="visStyle"><option value="photo">실사 사진·영상</option><option value="animation">애니메이션(모션그래픽)</option><option value="mixed">혼합 (도식은 애니, 나머지 실사)</option></select></div>
+          <div><label>한 컷 최대 길이(초)</label><input id="maxShot" type="number" min="2" max="10" step="0.5"></div>
           <div><label>AI 이미지 비율</label><input id="imgRatio" type="number" min="0" max="1" step="0.05"></div>
           <div><label>1편 예산($)</label><input id="perVideo" type="number" min="0" step="1"></div>
         </div>

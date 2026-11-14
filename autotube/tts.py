@@ -293,11 +293,32 @@ def gemini(text, out_path, production_id=None, voice_id=None, style=""):
     tmpdir = tempfile.mkdtemp(prefix="tts_")
     pieces = []
     try:
+        ref = float(s["production"].get("custom_voice_ref_pitch", 0) or 0) if custom else 0
+        tol = float(s["production"].get("custom_voice_pitch_tolerance", 0.25))
+        tries = int(s["production"].get("custom_voice_retries", 2))
         for i, chunk in enumerate(chunks):
-            raw, mime = _gemini_once(chunk, voice, style, key, pv["gemini_tts_model"])
             p = os.path.join(tmpdir, f"p{i:03d}.wav")
-            _write_piece(raw, mime, p)
+            best = None  # (distance, path)
+            for attempt in range(tries + 1 if ref else 1):
+                # retries drop the delivery cue: style text is what pulls Gemini away from the cloned timbre
+                raw, mime = _gemini_once(chunk, voice, style if attempt == 0 else "", key, pv["gemini_tts_model"])
+                cand = os.path.join(tmpdir, f"p{i:03d}_{attempt}.wav")
+                _write_piece(raw, mime, cand)
+                if not ref:
+                    best = (0, cand)
+                    break
+                from . import voicecheck
+                f0 = voicecheck.median_pitch(cand) or ref
+                dist = abs(f0 - ref) / ref
+                if best is None or dist < best[0]:
+                    best = (dist, cand)
+                if dist <= tol:
+                    break
+            os.replace(best[1], p)
             pieces.append(p)
+            for left in os.listdir(tmpdir):
+                if left.startswith(f"p{i:03d}_"):
+                    os.remove(os.path.join(tmpdir, left))
         _join(pieces, out_path)
     finally:
         for p in pieces:

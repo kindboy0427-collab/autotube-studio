@@ -21,11 +21,14 @@ _LOCK = threading.RLock()
 
 SECRET_KEYS = {
     "GEMINI_API_KEY": "🎬 제작용 Gemini 키 (유료 결제된 myvoice 프로젝트) — 내 목소리 내레이션·AI 이미지·AI 영상",
-    "GEMINI_FREE_API_KEY": "📚 학습용 Gemini 키 (결제 안 한 무료 프로젝트) — 유튜브 영상 시청·분석·주제 추천, 하루 8시간 무료",
+    "GEMINI_FREE_API_KEY": "📚 학습용 Gemini 키 (결제 안 한 무료 프로젝트) — 유튜브 영상 시청·분석, 하루 약 20회 무료",
     "YOUTUBE_API_KEY": "YouTube Data API v3 (검색·통계·댓글)",
     "OPENAI_API_KEY": "OpenAI API (대본, 보조 음성)",
     "ELEVENLABS_API_KEY": "ElevenLabs (내 목소리 복제·감정 연기·배경음악)",
     "PEXELS_API_KEY": "Pexels (무료 스톡 영상·사진)",
+    "PIXABAY_API_KEY": "Pixabay (무료 스톡 영상, pixabay.com/api/docs 에서 발급)",
+    "VECTEEZY_API_KEY": "Vecteezy API 키 (스톡 영상, 월 500개 무료 → 이후 개당 $1)",
+    "VECTEEZY_ACCOUNT_ID": "Vecteezy 계정 ID (API 키와 함께 개발자 페이지에 표시됨)",
     "GITHUB_TOKEN": "GitHub 토큰 — 지금은 필요 없음 (비워두세요. 업데이트 저장소를 비공개로 바꿀 때만 사용)",
     "APIFY_TOKEN": "Apify (자막으로 저렴하게 영상 분석 — Gemini 무료 한도 소진 시)",
 }
@@ -57,6 +60,14 @@ DEFAULTS = {
         "chars_per_second": 8.5,         # Korean narration speed (chars incl. spaces / s); auto-calibrated per voice after each video
         "max_ai_video_clips": 6,         # Gemini Omni clips per video (most expensive part)
         "ai_image_ratio": 0.45,          # (old plans only) share of non-video scenes that use AI images
+        "vecteezy_downloads_per_month": 490,  # stay under the free 500/month
+        "vecteezy_plan": "free",         # free | payg ($1 per download)
+        "footage_fit_check": True,       # AI looks at each real/stock/CC clip and rejects footage that doesn't match the narration
+        "footage_min_score": 6,          # 0-10
+        "footage_tries": 3,              # candidates checked per source before moving to the next source
+        "cc_youtube_searches_per_day": 60,  # CC BY YouTube footage searches (100 quota units each, cached per query)
+        "max_shot_seconds": 4.0,         # no single shot longer than this: long scenes get extra real footage cuts
+        "visual_style": "photo",         # photo | animation | mixed (diagrams animated, the rest photographic)
         "min_real_ratio": 0.6,           # at least 60 % of scenes use real footage/photos (archives, stock, people)
         "image_source": "ai",            # ai: Gemini makes images (paid) / manual: you make them (e.g. ChatGPT) from the prompt list
         "burn_subtitles": True,
@@ -70,7 +81,10 @@ DEFAULTS = {
         "align_subtitles": "auto",       # auto: local faster-whisper word timing if installed, else proportional
         "whisper_model": "small",
         "custom_voice_per_sentence": True,  # my/designed Gemini voice: short chunks (stops mid-clip voice switching)
-        "custom_voice_group_sentences": 3,  # sentences per request (Tier 1 = 100 TTS requests/day); 1 = old one-per-sentence
+        "custom_voice_group_sentences": 3,
+        "custom_voice_ref_pitch": 0,        # Hz of the owner's real voice (0 = no check); a chunk far off is regenerated
+        "custom_voice_pitch_tolerance": 0.25,
+        "custom_voice_retries": 2,  # sentences per request (Tier 1 = 100 TTS requests/day); 1 = old one-per-sentence
         "custom_voice_style": "off",       # off: no style cue for my voice (cues can pull it away from my timbre) / light
         "voice_check": True,               # regenerate scenes whose voice pitch jumps (male<->female)
         "voice_fallback": "same_voice",  # same_voice: a channel with its own voice never switches to another voice mid-video

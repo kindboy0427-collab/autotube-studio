@@ -17,7 +17,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from . import align, archive, budget, channels, config, db, gemini, media, music, planner, stock, tts, voicecheck
+from . import align, archive, budget, ccvideo, channels, config, stock2, db, footcheck, gemini, media, music, planner, stock, tts, voicecheck
 
 STEPS = ["plan", "voice", "visuals", "music", "render", "thumbnail", "upload", "done"]
 PROGRESS = {"plan": 5, "voice": 20, "visuals": 40, "music": 75, "render": 80, "thumbnail": 92, "upload": 95, "done": 100}
@@ -35,6 +35,10 @@ class Providers:
     archive_photo = staticmethod(archive.find_photo)
     person_photo = staticmethod(archive.find_person)
     person_video = staticmethod(archive.find_person_video)
+    cc_video = staticmethod(ccvideo.find_video)
+    pixabay_video = staticmethod(stock2.pixabay_video)
+    vecteezy_video = staticmethod(stock2.vecteezy_video)
+    fits = staticmethod(footcheck.fits)
     music = staticmethod(music.get_track)
 
     @staticmethod
@@ -108,11 +112,11 @@ def assign_visual_types(scenes, max_ai_video, ai_image_ratio):
 IMAGE_SLOT_TYPES = ("ai_image", "ai_video", "diagram")
 CHAINS = {
     "ai_video": ["ai_video", "my_image", "ai_image", "stock_video", "stock_photo"],
-    "ai_image": ["my_image", "ai_image", "stock_video", "stock_photo"],
+    "ai_image": ["my_image", "ai_image", "vecteezy_video", "pixabay_video", "stock_video", "stock_photo"],
     "diagram": ["my_image", "ai_image", "stock_photo"],
-    "real": ["archive_video", "stock_video", "archive_photo", "stock_photo", "ai_image"],
-    "person": ["person_video", "person_photo", "archive_photo", "stock_photo", "ai_image"],
-    "stock_video": ["stock_video", "stock_photo", "ai_image"],
+    "real": ["archive_video", "cc_video", "vecteezy_video", "pixabay_video", "stock_video", "archive_photo", "stock_photo", "ai_image"],
+    "person": ["person_video", "cc_person_video", "person_photo", "archive_photo", "stock_photo", "ai_image"],
+    "stock_video": ["vecteezy_video", "pixabay_video", "stock_video", "cc_video", "stock_photo", "ai_image"],
 }
 
 
@@ -134,8 +138,7 @@ def image_slots(plan):
     slots = [{"n": 0, "what": "썸네일 배경", "prompt": plan["thumbnail"].get("image_prompt", "")}]
     for i, s in enumerate(plan["scenes"]):
         if s["visual"].get("type") in IMAGE_SLOT_TYPES:
-            style = "clean minimal infographic illustration, flat colors, no text" if s["visual"]["type"] == "diagram" else \
-                "cinematic, photorealistic, dramatic lighting, no text, no watermark"
+            style = visual_style_suffix(s["visual"]["type"], config.load_settings()["production"])
             slots.append({"n": i + 1, "what": s.get("chapter", ""), "narration": s["narration"],
                           "prompt": f"{s['visual'].get('prompt', '')}, {style}"})
     return slots
@@ -193,13 +196,13 @@ def _visual(pid, s, i, d, folder, used, providers, credits, manual=False, out=No
             if k == "ai_video":
                 p = str(folder / f"s{i:03d}_aivideo.mp4")
                 if not Path(p).exists():
-                    providers.ai_video(prompt + ", cinematic, 16:9", p, production_id=pid)
+                    providers.ai_video(prompt + ", " + visual_style_suffix(kind, config.load_settings()["production"]) + ", 16:9",
+                                       p, production_id=pid)
                 return k, p
             if k == "ai_image":
                 p = str(folder / f"s{i:03d}_aiimage.png")
                 if not Path(p).exists():
-                    style = "clean minimal infographic illustration, flat colors, no text" if kind == "diagram" else \
-                        "cinematic lighting, highly detailed, no text, no watermark"
+                    style = visual_style_suffix(kind, config.load_settings()["production"])
                     providers.ai_image(prompt + ", " + style, p, production_id=pid)
                 return k, p
             if k == "person_video":
@@ -208,25 +211,17 @@ def _visual(pid, s, i, d, folder, used, providers, credits, manual=False, out=No
                     _, meta = providers.person_video(s["visual"].get("person", ""), used, p)
                     credits.append(meta)
                 return "stock_video", p
-            if k in ("archive_video", "stock_video"):
-                p = str(folder / f"s{i:03d}_{'archive' if k == 'archive_video' else 'stock'}.mp4")
+            if k in ("archive_video", "stock_video", "cc_video", "cc_person_video", "pixabay_video", "vecteezy_video"):
+                if not getattr(providers, "cc_video" if k.startswith("cc_") else k, None):
+                    continue
+                p = str(folder / f"s{i:03d}_{'archive' if k == 'archive_video' else 'cc' if k.startswith('cc_') else 'stock'}.mp4")
                 if not Path(p).exists():
-                    if k == "archive_video":
-                        _, meta = providers.archive_video(q, used, p, **(flags or {"space": space}))
-                    else:
-                        _, meta = providers.stock_video(q, d, used, p)
-                    credits.append(meta)
+                    credits.append(_get_footage(k, q, d, used, p, providers, flags or {"space": space}, s, pid))
                 return "stock_video", p
             if k in ("archive_photo", "stock_photo", "person_photo"):
                 p = str(folder / f"s{i:03d}_{k}.jpg")
                 if not Path(p).exists():
-                    if k == "person_photo":
-                        _, meta = providers.person_photo(s["visual"].get("person", ""), used, p)
-                    elif k == "archive_photo":
-                        _, meta = providers.archive_photo(q, used, p, **(flags or {"space": space}))
-                    else:
-                        _, meta = providers.stock_photo(q, used, p)
-                    credits.append(meta)
+                    credits.append(_get_footage(k, q, d, used, p, providers, flags or {"space": space}, s, pid))
                 return "stock_photo", p
         except budget.BudgetExceeded as ex:
             errors.append(f"{k}: {ex}")
@@ -235,6 +230,98 @@ def _visual(pid, s, i, d, folder, used, providers, credits, manual=False, out=No
             errors.append(f"{k}: {str(ex)[:100]}")
     _log(pid, f"장면 {i + 1} 시각자료 실패 → 제목 카드 사용 ({'; '.join(errors)[:300]})")
     return "card", None
+
+
+def _get_footage(k, q, d, used, p, providers, flags, sc, pid):
+    """Fetch footage of kind k and keep it only if it shows what the narration talks about.
+    Rejected candidates stay in `used`, so the next try returns a different file."""
+    person = sc["visual"].get("person", "") if k in ("cc_person_video", "person_photo") else ""
+    want = sc["visual"].get("prompt") or sc["visual"].get("stock_query") or ""
+    fetch = {
+        "archive_video": lambda: providers.archive_video(q, used, p, **(flags or {})),
+        "stock_video": lambda: providers.stock_video(q, d, used, p),
+        "pixabay_video": lambda: providers.pixabay_video(q, d, used, p),
+        "vecteezy_video": lambda: providers.vecteezy_video(q, d, used, p, narration=sc["narration"], want=want,
+                                                           production_id=pid),
+        "cc_video": lambda: providers.cc_video(q, d, used, p),
+        "cc_person_video": lambda: providers.cc_video(q, d, used, p, person=person),
+        "archive_photo": lambda: providers.archive_photo(q, used, p, **(flags or {})),
+        "stock_photo": lambda: providers.stock_photo(q, used, p),
+        "person_photo": lambda: providers.person_photo(person, used, p),
+    }[k]
+    check = getattr(providers, "fits", None)
+    tries = int(config.load_settings()["production"].get("footage_tries", 3))
+    words = (q or "").split()
+    queries = [q] + ([" ".join(words[:2])] if len(words) > 2 and k not in ("person_photo", "cc_person_video") else [])
+    last = None
+    for qq in queries:
+        q = qq
+        try:
+            return _try_footage(fetch, tries, check, p, sc, want, k, person, pid)
+        except Exception as ex:
+            last = ex
+    raise last
+
+
+def _try_footage(fetch, tries, check, p, sc, want, k, person, pid):
+    for _ in range(tries):
+        _, meta = fetch()
+        if meta.pop("_prechecked", False) or not check or check(p, sc["narration"], want, "image" if k.endswith("photo") else "video", person, pid):
+            return meta
+        Path(p).unlink(missing_ok=True)
+    raise RuntimeError(f"{k}: 내레이션과 맞는 화면 없음 ({tries}개 검사)")
+
+
+def _shot_list(i, sc, d, kind, raw, work, used, providers, credits, flags, ps):
+    """Split a scene into shots of at most max_shot_seconds. The first shot is the scene's own visual;
+    the others are extra REAL video (archives first, then stock video) for the same subject.
+    Video first: an image only fills a gap when no footage is found."""
+    import math
+    max_shot = float(ps.get("max_shot_seconds", 4.0))
+    n = max(1, math.ceil(d / max_shot - 0.15))
+    first = ("video" if kind in ("ai_video", "stock_video") else "image", raw)
+    if n == 1:
+        return [first]
+    v = sc["visual"]
+    queries = [q for q in (v.get("stock_query"), v.get("query"), (v.get("prompt") or "")[:40]) if q]
+    shots = [first]
+    for j in range(1, n):
+        p = str(work / f"s{i:03d}_extra{j}.mp4")
+        if Path(p).exists():
+            shots.append(("video", p))
+            continue
+        got = False
+        for q in queries:
+            for src in ("archive_video", "cc_video", "vecteezy_video", "pixabay_video", "stock_video"):
+                if not getattr(providers, src, None):
+                    continue
+                try:
+                    credits.append(_get_footage(src, q, d / n, used, p, providers, flags, sc, None))
+                    got = True
+                    break
+                except Exception:
+                    continue
+            if got:
+                break
+        if got:
+            shots.append(("video", p))
+        elif first[0] == "image":
+            shots.append(first)  # same image, different camera move (better than one 10 s still)
+        else:
+            break  # a video scene simply keeps its own footage longer
+    return shots
+
+
+def visual_style_suffix(kind, ps):
+    """One look per channel: 'photo' | 'animation' | 'mixed' (diagrams animated, the rest photographic)."""
+    style = (ps or {}).get("visual_style", "photo")
+    photo = "photorealistic documentary photograph, real-world look, natural colors, no cartoon, no illustration, no text, no watermark"
+    anim = "polished 2D motion-graphics animation style, clean flat vector shapes, consistent color palette, no text, no watermark"
+    if style == "animation":
+        return anim
+    if style == "mixed":
+        return anim if kind == "diagram" else photo
+    return "clean minimal infographic, flat colors, no text" if kind == "diagram" else photo
 
 
 def channel_voices(channel):
@@ -439,29 +526,30 @@ def run(pid, providers=Providers):
             d = sc["_voice"]["duration"] + 0.35 + (float(ps.get("emphasis_pause_seconds", 1.2)) if sc.get("pause_after") else 0)
             sc["_dur"] = d
             clip = work / f"s{i:03d}_clip.mp4"
+            if clip.exists():
+                try:  # a half-written clip from a crashed run would silently cut the whole video there
+                    ok = media.duration(clip) >= d * 0.8
+                except Exception:
+                    ok = False
+                if not ok:
+                    _log(pid, f"장면 {i + 1} 화면 파일이 깨져 있어 다시 만듭니다")
+                    clip.unlink(missing_ok=True)
             if not clip.exists():
                 kind, raw = _visual(pid, sc, i, d, work, used, providers, credits, manual=manual, out=out, space=space, flags=flags)
                 tmp = work / f"s{i:03d}_base.mp4"
-                second = None
-                if kind == "stock_video" and sc["visual"].get("type") == "real" and d >= float(ps.get("multi_cut_seconds", 6.5)):
-                    # long real scene -> two different real shots (faster, more documentary-like cutting)
-                    try:
-                        p2 = str(work / f"s{i:03d}_archive2.mp4")
-                        if not Path(p2).exists():
-                            q2 = sc["visual"].get("stock_query") or sc["visual"].get("prompt", "")[:40]
-                            try:
-                                _, m2 = providers.archive_video(q2, used, p2, **flags)
-                            except Exception:
-                                _, m2 = providers.stock_video(q2, d / 2, used, p2)
-                            credits.append(m2)
-                        second = p2
-                    except Exception:
-                        second = None
-                if kind in ("ai_video", "stock_video") and second:
-                    a, b = work / f"s{i:03d}_partA.mp4", work / f"s{i:03d}_partB.mp4"
-                    media.video_clip(raw, d / 2, str(a))
-                    media.video_clip(second, d - d / 2, str(b))
-                    media.concat([str(a), str(b)], str(tmp), str(work / f"s{i:03d}_parts.txt"))
+                shots = _shot_list(i, sc, d, kind, raw, work, used, providers, credits, flags, ps) \
+                    if kind != "card" else []
+                if len(shots) > 1:
+                    # no shot longer than ~4 s: extra real footage (archives/stock video) cut into the scene
+                    parts, each = [], d / len(shots)
+                    for j, (sk, sp) in enumerate(shots):
+                        part = work / f"s{i:03d}_shot{j}.mp4"
+                        if sk == "video":
+                            media.video_clip(sp, each, str(part))
+                        else:
+                            media.image_clip(sp, each, str(part), motion=i + j)
+                        parts.append(str(part))
+                    media.concat(parts, str(tmp), str(work / f"s{i:03d}_parts.txt"))
                 elif kind in ("ai_video", "stock_video"):
                     media.video_clip(raw, d, str(tmp))
                 elif kind in ("ai_image", "stock_photo"):
@@ -524,7 +612,11 @@ def run(pid, providers=Providers):
         final = out / "video.mp4"
         _, burned = media.final_mux(str(video_only), str(audio), str(final), srt=str(srt),
                                     burn=ps.get("burn_subtitles", True), cwd=str(out))
-        _log(pid, f"렌더 완료: {round(media.duration(final) / 60, 1)}분 · 자막 {'영상에 입힘' if burned else '별도 파일'}")
+        got, want = media.duration(final), media.duration(audio)
+        if got < want - 3:  # never upload a cut-off video
+            final.unlink(missing_ok=True)
+            raise media.MediaError(f"렌더 길이 이상: 영상 {got:.0f}초 / 내레이션 {want:.0f}초 → 업로드 중단, [이어서 다시 시도]로 깨진 장면만 다시 만듭니다")
+        _log(pid, f"렌더 완료: {round(got / 60, 1)}분 · 자막 {'영상에 입힘' if burned else '별도 파일'}")
         _set(pid, video_path=str(final), srt_path=str(srt))
 
         # 6 thumbnail -------------------------------------------------------

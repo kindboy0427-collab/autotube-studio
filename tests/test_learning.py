@@ -128,7 +128,9 @@ class WebTest(TempHome):
             self.assertEqual(r.status_code, 200)
             submit.assert_called_once()
             self.assertEqual(len(c.get("/api/productions").json()), 1)
-            c.post("/api/secrets", json={"GEMINI_API_KEY": "g-123"}, headers=h)
+            c.post("/api/secrets", json={"GEMINI_API_KEY": "AIzaTEST0000000000000000000000000000000"}, headers=h)
+            r = c.post("/api/secrets", json={"GEMINI_API_KEY": "mypassword1"}, headers=h).json()
+            self.assertEqual(r["rejected"], ["GEMINI_API_KEY"])  # a browser-filled password is never stored
             self.assertTrue(c.get("/api/status").json()["keys"]["GEMINI_API_KEY"]["set"])
             c.post("/api/settings", json={"learning": {"niches": ["역사"]}, "web_port": 1}, headers=h)
             s = config.load_settings()
