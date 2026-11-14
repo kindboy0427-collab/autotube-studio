@@ -67,6 +67,9 @@ DEFAULTS = {
         "footage_min_score": 6,          # 0-10
         "footage_tries": 3,              # candidates checked per source before moving to the next source
         "cc_youtube_searches_per_day": 60,  # CC BY YouTube footage searches (100 quota units each, cached per query)
+        "visual_workers": 4,             # scenes built in parallel (footage search/AI checks are network-bound)
+        "extra_shot_sources": ["vecteezy_video", "pixabay_video", "stock_video"],  # fast sources for the extra 4-s cuts
+        "extra_shot_tries": 2,
         "max_shot_seconds": 4.0,         # no single shot longer than this: long scenes get extra real footage cuts
         "visual_style": "photo",         # photo | animation | mixed (diagrams animated, the rest photographic)
         "min_real_ratio": 0.6,           # at least 60 % of scenes use real footage/photos (archives, stock, people)

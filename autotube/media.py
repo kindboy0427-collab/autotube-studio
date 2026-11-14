@@ -100,13 +100,19 @@ def drawtext_filter(textfile, size=64, y="h*0.08", box=True):
     return ":".join(parts)
 
 
+def fit_size(text, max_width, size):
+    """Font size so one line never runs off the frame (Korean glyphs ~1.0 em, Latin/digits ~0.6 em)."""
+    em = sum(1.0 if ord(c) > 0x2E80 else 0.62 for c in (text or "")) or 1
+    return max(18, min(int(size), int(max_width / em)))
+
+
 def overlay_text(clip, text, out):
     if not text:
         return clip
-    _, h = _wh()
+    w, h = _wh()
     txt = Path(out).with_suffix(".txt")
     txt.write_text(text, encoding="utf-8")
-    run(["-i", clip, "-vf", drawtext_filter(txt, size=int(h * 0.06)), *VENC, "-an", out])
+    run(["-i", clip, "-vf", drawtext_filter(txt, size=fit_size(text, w * 0.9, int(h * 0.06))), *VENC, "-an", out])
     return out
 
 
@@ -120,7 +126,7 @@ def quote_card(clip, text, by, out):
     font = config.font_path()
     ff = f":fontfile='{_ff_path(font)}'" if font else ""
     vf = (f"drawbox=x=0:y=ih*0.70:w=iw:h=ih*0.22:color=black@0.55:t=fill,"
-          f"drawtext=textfile='{_ff_path(t1)}':expansion=none{ff}:fontsize={int(h * 0.045)}:fontcolor=white:"
+          f"drawtext=textfile='{_ff_path(t1)}':expansion=none{ff}:fontsize={fit_size(text, _wh()[0] * 0.92, int(h * 0.045))}:fontcolor=white:"
           f"x=(w-text_w)/2:y=h*0.735,"
           f"drawtext=textfile='{_ff_path(t2)}':expansion=none{ff}:fontsize={int(h * 0.032)}:fontcolor=0xFFD54F:"
           f"x=(w-text_w)/2:y=h*0.835")
@@ -200,6 +206,9 @@ def build_srt(scene_words, path, max_chars=18, max_seconds=3.2):
     return path, len(cues)
 
 
+LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11"  # YouTube plays back at about -14 LUFS: every video equally loud
+
+
 def final_mux(video, audio, out, srt=None, burn=True, cwd=None):
     args = ["-i", video, "-i", audio]
     if srt and burn:
@@ -216,16 +225,16 @@ def final_mux(video, audio, out, srt=None, burn=True, cwd=None):
                  f"OutlineColour=&H00000000,BorderStyle=1,Outline=1.6,Shadow=0,MarginV=20")
         vf = f"subtitles={Path(srt).name}:fontsdir=fonts:force_style='{style}'"
         try:
-            run([*args, "-vf", vf, *VENC, "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart",
+            run([*args, "-vf", vf, *VENC, "-af", LOUDNORM, "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart",
                  Path(out).name if Path(out).parent == Path(cwd) else out], cwd=cwd)
             return out, True
         except MediaError:
             pass  # libass missing -> deliver without burned subtitles
-    run([*args, "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", out])
+    run([*args, "-c:v", "copy", "-af", LOUDNORM, "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", out])
     return out, False
 
 
-def thumbnail(background, text, out, size=(1280, 720)):
+def thumbnail(background, text, out, size=(1280, 720), variant=0):
     from PIL import Image, ImageDraw, ImageFont, ImageFilter
     W, H = size
     if background and os.path.isfile(background):
@@ -252,10 +261,14 @@ def thumbnail(background, text, out, size=(1280, 720)):
         if max(widths) <= W * 0.9:
             break
         fs -= 8
-    y = H - 60 - len(lines) * (fs + 12)
-    for ln in lines:
+    # variant 0: yellow bottom-centre / 1: white top-left / 2: red-white bottom-left (A/B candidates)
+    color = [(255, 230, 0), (255, 255, 255), (255, 70, 60)][variant % 3]
+    y = 60 if variant % 3 == 1 else H - 60 - len(lines) * (fs + 12)
+    for k, ln in enumerate(lines):
         w = draw.textbbox((0, 0), ln, font=font, stroke_width=8)[2]
-        draw.text(((W - w) // 2, y), ln, font=font, fill=(255, 230, 0), stroke_width=8, stroke_fill=(0, 0, 0))
+        x = (W - w) // 2 if variant % 3 == 0 else 60
+        fill = color if not (variant % 3 == 2 and k) else (255, 255, 255)
+        draw.text((x, y), ln, font=font, fill=fill, stroke_width=8, stroke_fill=(0, 0, 0))
         y += fs + 12
     img.save(out, "JPEG", quality=90)
     return out

@@ -284,7 +284,7 @@ class RealRatio(TempHome):
 
 class MultiCut(TempHome):
     def test_long_real_scene_gets_two_shots(self):
-        config.save_settings({"production": {"resolution": "640x360", "fps": 24, "voice_check": False, "max_shot_seconds": 1.0}})
+        config.save_settings({"production": {"resolution": "640x360", "fps": 24, "voice_check": False, "max_shot_seconds": 1.0, "extra_shot_sources": ["archive_video"]}})
         got = []
 
         class P(FakeProviders):

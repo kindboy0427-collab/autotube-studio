@@ -232,7 +232,53 @@ def _visual(pid, s, i, d, folder, used, providers, credits, manual=False, out=No
     return "card", None
 
 
-def _get_footage(k, q, d, used, p, providers, flags, sc, pid):
+def _qa_scenes(pid, scenes, work):
+    """Indices of scenes whose real/stock footage does not fit the narration (score < footage_min_score - 1)."""
+    from concurrent.futures import ThreadPoolExecutor
+    lim = float(config.load_settings()["production"].get("footage_min_score", 6)) - 1
+
+    def one(i):
+        sc = scenes[i]
+        if sc["visual"].get("type") in ("ai_image", "ai_video", "diagram"):
+            return None  # generated for this narration
+        clip = work / f"s{i:03d}_clip.mp4"
+        if not clip.exists():
+            return None
+        sco = footcheck.score(clip, sc["narration"], sc["visual"].get("prompt", ""), kind="video", production_id=pid)
+        return i if sco is not None and sco < lim else None
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        return [i for i in ex.map(one, range(len(scenes))) if i is not None]
+
+
+def _scene_queries(pid, scenes):
+    """3-5 English stock-footage search terms per scene (specific -> broad), one LLM call per video, cached."""
+    key = "queries:" + pid
+    got = db.kv_get(key)
+    if isinstance(got, list) and len(got) == len(scenes):
+        return got
+    try:
+        from . import llm
+        items = [{"n": i, "narration": sc["narration"][:200], "visual": (sc["visual"].get("prompt") or "")[:160]}
+                 for i, sc in enumerate(scenes)]
+        res = llm.generate_json(
+            "For each scene of a Korean science documentary, write 3-5 short ENGLISH search terms for real stock "
+            "footage (Vecteezy/Pexels/Pixabay/Wikimedia/NASA). Order them from specific to broad, 1-4 words each, "
+            "concrete visible things (e.g. 'silicon wafer', 'cleanroom worker', 'chip factory'), no abstract words. "
+            'Return JSON: {"scenes": [{"n": 0, "queries": ["..."]}]}. Scenes: ' + json.dumps(items, ensure_ascii=False),
+            production_id=pid)
+        out = [[] for _ in scenes]
+        for it in (res or {}).get("scenes", []):
+            n = int(it.get("n", -1))
+            if 0 <= n < len(out):
+                out[n] = [str(x)[:60] for x in (it.get("queries") or [])][:5]
+        db.kv_set(key, out)
+        return out
+    except Exception as ex:
+        _log(pid, f"장면별 검색어 생성 실패(기본 검색어 사용): {str(ex)[:120]}")
+        return [[] for _ in scenes]
+
+
+def _get_footage(k, q, d, used, p, providers, flags, sc, pid, tries=None):
     """Fetch footage of kind k and keep it only if it shows what the narration talks about.
     Rejected candidates stay in `used`, so the next try returns a different file."""
     person = sc["visual"].get("person", "") if k in ("cc_person_video", "person_photo") else ""
@@ -250,17 +296,19 @@ def _get_footage(k, q, d, used, p, providers, flags, sc, pid):
         "person_photo": lambda: providers.person_photo(person, used, p),
     }[k]
     check = getattr(providers, "fits", None)
-    tries = int(config.load_settings()["production"].get("footage_tries", 3))
+    tries = tries or int(config.load_settings()["production"].get("footage_tries", 3))
     words = (q or "").split()
     queries = [q] + ([" ".join(words[:2])] if len(words) > 2 and k not in ("person_photo", "cc_person_video") else [])
+    if k not in ("person_photo", "cc_person_video"):
+        queries = list(dict.fromkeys((sc["visual"].get("queries") or []) + queries))  # best terms first, no repeats
     last = None
-    for qq in queries:
+    for qq in queries[:max(2, tries)]:
         q = qq
         try:
-            return _try_footage(fetch, tries, check, p, sc, want, k, person, pid)
+            return _try_footage(fetch, 1 if len(queries) > 2 else tries, check, p, sc, want, k, person, pid)
         except Exception as ex:
             last = ex
-    raise last
+    raise last or RuntimeError(f"{k}: 자료 없음")
 
 
 def _try_footage(fetch, tries, check, p, sc, want, k, person, pid):
@@ -292,11 +340,13 @@ def _shot_list(i, sc, d, kind, raw, work, used, providers, credits, flags, ps):
             continue
         got = False
         for q in queries:
-            for src in ("archive_video", "cc_video", "vecteezy_video", "pixabay_video", "stock_video"):
+            # extra cuts: only the fast sources, fewer candidates (the scene's main shot already got the thorough search)
+            for src in ps.get("extra_shot_sources", ["vecteezy_video", "pixabay_video", "stock_video"]):
                 if not getattr(providers, src, None):
                     continue
                 try:
-                    credits.append(_get_footage(src, q, d / n, used, p, providers, flags, sc, None))
+                    credits.append(_get_footage(src, q, d / n, used, p, providers, flags, sc, None,
+                                                tries=int(ps.get("extra_shot_tries", 2))))
                     got = True
                     break
                 except Exception:
@@ -346,7 +396,8 @@ def channel_voices(channel):
 
 def default_own_voice():
     """No voice chosen for the channel -> use the owner's registered voice if there is one."""
-    r = db.one("SELECT engine, ref FROM voices WHERE kind IN ('clone','manual') ORDER BY created_at LIMIT 1")
+    # newest registered voice wins (the owner's latest choice, e.g. ElevenLabs over an older Gemini clone)
+    r = db.one("SELECT engine, ref FROM voices WHERE kind IN ('clone','manual') ORDER BY created_at DESC LIMIT 1")
     return {"engine": r["engine"], "ref": r["ref"]} if r else None
 
 
@@ -419,6 +470,8 @@ def run(pid, providers=Providers):
     s = config.load_settings()
     ps = s["production"]
     prod = db.one("SELECT * FROM productions WHERE id=?", (pid,))
+    if not prod:  # discarded while waiting in the queue
+        return "deleted"
     channel = channels.get(prod.get("channel_id"))
     db.execute("UPDATE productions SET step_times=NULL WHERE id=? AND status IN ('queued') AND plan IS NULL", (pid,))
     out = (config.OUTPUT / pid).resolve()
@@ -524,9 +577,16 @@ def run(pid, providers=Providers):
         flags = _topic_flags(channel, plan)
         space = flags["space"]
         used, credits, clips, kinds = set(), [], [], {}
+        lock = threading.Lock()
+        for i, q in enumerate(_scene_queries(pid, scenes)):
+            if q:
+                scenes[i]["visual"]["queries"] = q
         for i, sc in enumerate(scenes):
-            d = sc["_voice"]["duration"] + 0.35 + (float(ps.get("emphasis_pause_seconds", 1.2)) if sc.get("pause_after") else 0)
-            sc["_dur"] = d
+            sc["_dur"] = sc["_voice"]["duration"] + 0.35 + (float(ps.get("emphasis_pause_seconds", 1.2)) if sc.get("pause_after") else 0)
+
+        def build(i, sc):
+            """One scene's clip. Scenes are built in parallel: footage search and AI checks are network-bound."""
+            d = sc["_dur"]
             clip = work / f"s{i:03d}_clip.mp4"
             if clip.exists():
                 try:  # a half-written clip from a crashed run would silently cut the whole video there
@@ -567,9 +627,22 @@ def run(pid, providers=Providers):
                                      str(tmp.with_name(tmp.stem + "_q.mp4")))
                     tmp.with_name(tmp.stem + "_q.mp4").replace(tmp)
                 tmp.replace(clip)
-                kinds[kind] = kinds.get(kind, 0) + 1
-            clips.append(str(clip))
-            _set(pid, progress=PROGRESS["visuals"] + 35 * (i + 1) / len(scenes))
+                with lock:
+                    kinds[kind] = kinds.get(kind, 0) + 1
+
+            return str(work / f"s{i:03d}_clip.mp4")
+
+        from concurrent.futures import ThreadPoolExecutor
+        done = [0]
+        results = [None] * len(scenes)
+        with ThreadPoolExecutor(max_workers=max(1, int(ps.get("visual_workers", 4)))) as ex:
+            futs = {ex.submit(build, i, sc): i for i, sc in enumerate(scenes)}
+            from concurrent.futures import as_completed
+            for f in as_completed(futs):
+                results[futs[f]] = f.result()
+                done[0] += 1
+                _set(pid, progress=PROGRESS["visuals"] + 35 * done[0] / len(scenes))
+        clips = results
         if kinds:
             _log(pid, "시각자료: " + ", ".join(f"{k} {v}" for k, v in kinds.items()))
         cred_file = work / "credits.json"
@@ -619,6 +692,24 @@ def run(pid, providers=Providers):
             final.unlink(missing_ok=True)
             raise media.MediaError(f"렌더 길이 이상: 영상 {got:.0f}초 / 내레이션 {want:.0f}초 → 업로드 중단, [이어서 다시 시도]로 깨진 장면만 다시 만듭니다")
         _log(pid, f"렌더 완료: {round(got / 60, 1)}분 · 자막 {'영상에 입힘' if burned else '별도 파일'}")
+        # self-review: AI looks at every real-footage scene; mismatches are rebuilt once as AI visuals
+        if ps.get("self_qa", True) and not db.kv_get("qa_done:" + pid) and not manual:
+            bad = _qa_scenes(pid, scenes, work)
+            db.kv_set("qa_done:" + pid, True)
+            if bad:
+                _log(pid, f"자체 검수: 내레이션과 안 맞는 장면 {len(bad)}개 → AI 화면으로 다시 만듭니다 ({', '.join(str(i + 1) for i in bad)})")
+                row = json.loads(db.one("SELECT plan FROM productions WHERE id=?", (pid,))["plan"])
+                for i in bad:
+                    row["scenes"][i]["visual"]["type"] = "ai_video" if row["scenes"][i].get("importance", 1) >= 3 else "ai_image"
+                    for f in work.glob(f"s{i:03d}_*"):
+                        if "voice" not in f.name:
+                            f.unlink(missing_ok=True)
+                _set(pid, plan=json.dumps(row, ensure_ascii=False))
+                for f in ("video_only.mp4", "video_list.txt"):
+                    (work / f).unlink(missing_ok=True)
+                final.unlink(missing_ok=True)
+                return run(pid, providers)
+            _log(pid, "자체 검수: 모든 장면 통과")
         _set(pid, video_path=str(final), srt_path=str(srt))
 
         # 6 thumbnail -------------------------------------------------------
@@ -640,7 +731,14 @@ def run(pid, providers=Providers):
                 firsts = sorted(work.glob("s*_aiimage.png")) or sorted(work.glob("s*_photo.jpg"))
                 bg = firsts[0] if firsts else None
         thumb = out / "thumbnail.jpg"
-        media.thumbnail(str(bg) if bg else None, plan["thumbnail"].get("text", plan["title"][:12]), str(thumb))
+        ttext = plan["thumbnail"].get("text", plan["title"][:12])
+        media.thumbnail(str(bg) if bg else None, ttext, str(thumb))
+        alts = sorted(work.glob("s*_aiimage.png"))[:2]
+        for k, alt_bg in enumerate([bg, bg] + alts):  # candidates to pick from (YouTube Test & Compare)
+            try:
+                media.thumbnail(str(alt_bg) if alt_bg else None, ttext, str(out / f"thumbnail_alt{k + 1}.jpg"), variant=k + 1)
+            except Exception:
+                pass
         _set(pid, thumbnail_path=str(thumb))
 
         # description with chapters, AI disclosure and credits ----------------
