@@ -367,7 +367,10 @@ def revoice(pid: str):
                 f.unlink(missing_ok=True)
     for name in ("video.mp4", "subtitles.srt"):
         Path(r["output_dir"] or "", name).unlink(missing_ok=True)
-    db.execute("UPDATE productions SET video_path=NULL, status='queued', step='voice' WHERE id=?", (pid,))
+    # the new version must be uploaded again (the uploader skips productions that already have a youtube_id)
+    db.execute("UPDATE productions SET video_path=NULL, youtube_id=NULL, privacy=NULL, status='queued', step='voice' WHERE id=?", (pid,))
+    if r["youtube_id"]:
+        db.kv_set("old_upload:" + pid, r["youtube_id"])
     WORKER.submit(pid)
     return {"ok": True, "note": "이미 유튜브에 올라간 영상은 그대로 두고 새로 올립니다" if r["youtube_id"] else ""}
 

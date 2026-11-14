@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Background music: ElevenLabs Music (paid plans) > your own files in assets/music."""
+"""Background music: free tracks in assets/music (YouTube Audio Library, Kevin MacLeod CC BY), credited automatically."""
 from __future__ import annotations
 import random
 
@@ -7,12 +7,35 @@ from . import config, http, budget
 
 
 def from_library(mood: str = ""):
+    """Pick the track whose file name shares the most mood words with the script's music mood
+    (file names like calm_ambient_wonder__Floating_Cities.mp3). YouTube Audio Library files you add
+    are picked the same way - put mood words at the start of their names."""
+    import re
     folder = config.ASSETS / "music"
     files = [p for p in folder.glob("*") if p.suffix.lower() in (".mp3", ".wav", ".m4a", ".ogg")]
     if not files:
         return None
-    tagged = [p for p in files if mood and mood.lower() in p.stem.lower()]
-    return str(random.choice(tagged or files))
+    want = set(re.findall(r"[a-z]+", (mood or "").lower()))
+    syn = {"documentary": "calm", "cinematic": "calm", "ambient": "ambient", "dramatic": "tense", "suspense": "tense",
+           "ominous": "dark", "uplifting": "hopeful", "inspiring": "hopeful", "curious": "curious", "wonder": "wonder"}
+    want |= {syn[w] for w in list(want) if w in syn}
+    def score(p):
+        tags = set(p.stem.split("__")[0].lower().replace("-", "_").split("_"))
+        return len(want & tags)
+    best = max(score(p) for p in files)
+    pool = [p for p in files if score(p) == best] if best else files
+    return str(random.choice(pool))
+
+
+def credit_for(path):
+    """Attribution line for a library track (assets/music/credits.json), or None if none is needed."""
+    import json
+    from pathlib import Path
+    f = config.ASSETS / "music" / "credits.json"
+    try:
+        return json.loads(f.read_text(encoding="utf-8")).get(Path(path).name)
+    except Exception:
+        return None
 
 
 def elevenlabs_music(prompt: str, seconds: float, out_path: str, production_id=None):
@@ -32,7 +55,8 @@ def elevenlabs_music(prompt: str, seconds: float, out_path: str, production_id=N
 
 
 def get_track(mood: str, seconds: float, out_path: str, production_id=None):
-    if config.get_secret("ELEVENLABS_API_KEY"):
+    # default: free tracks from assets/music (YouTube Audio Library + CC BY). ElevenLabs Music only if chosen.
+    if config.load_settings()["production"].get("music_source", "library") == "elevenlabs" and config.get_secret("ELEVENLABS_API_KEY"):
         try:
             return elevenlabs_music(mood or "calm cinematic documentary", seconds, out_path, production_id), "elevenlabs"
         except budget.BudgetExceeded:

@@ -407,7 +407,9 @@ def description_credits(plan, credits, work, voice_used, ai_kinds):
         if origin == "elevenlabs":
             media_c.append("음악: ElevenLabs Music으로 생성")
         elif origin == "library" and path:
-            media_c.append("음악: " + Path(path).stem)
+            cr = music.credit_for(path)
+            if cr:
+                media_c.append("음악: " + cr)
     if media_c:
         parts.append("\n".join(media_c))
     return "\n\n" + "\n\n".join(parts)

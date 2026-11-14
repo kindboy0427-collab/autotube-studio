@@ -62,6 +62,7 @@ DEFAULTS = {
         "ai_image_ratio": 0.45,          # (old plans only) share of non-video scenes that use AI images
         "vecteezy_downloads_per_month": 490,  # stay under the free 500/month
         "vecteezy_plan": "free",         # free | payg ($1 per download)
+        "music_source": "library",      # library (free tracks in assets/music) | elevenlabs (paid)
         "footage_fit_check": True,       # AI looks at each real/stock/CC clip and rejects footage that doesn't match the narration
         "footage_min_score": 6,          # 0-10
         "footage_tries": 3,              # candidates checked per source before moving to the next source
