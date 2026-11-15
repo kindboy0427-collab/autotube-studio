@@ -355,6 +355,9 @@ def _words_from_chars(chars, starts, ends):
     return words
 
 
+SEED_BUMP = 0  # producer raises it to get a different take when a scene was garbled
+
+
 def elevenlabs(text, out_path, production_id=None, voice_id=None, style="", prev_text="", next_text=""):
     s = config.load_settings()
     pv = dict(s["providers"])
@@ -366,7 +369,8 @@ def elevenlabs(text, out_path, production_id=None, voice_id=None, style="", prev
     body = {"text": text, "model_id": pv["elevenlabs_model"],
             # stable, faithful to the cloned voice, no exaggerated 'style' (that is what sounds AI-made)
             "voice_settings": {"stability": vs.get("stability", 0.6), "similarity_boost": vs.get("similarity_boost", 0.9),
-                               "style": vs.get("style", 0.0), "use_speaker_boost": vs.get("use_speaker_boost", True)}}
+                               "style": vs.get("style", 0.0), "use_speaker_boost": vs.get("use_speaker_boost", True)},
+            "seed": int(pv.get("elevenlabs_seed", 20261114)) + SEED_BUMP}  # same seed -> every scene keeps the same delivery
     # request stitching: the scene is read knowing what was said before and after -> one continuous narration
     if prev_text:
         body["previous_text"] = prev_text[-800:]

@@ -212,6 +212,19 @@ def cps_for(channel=None):
     return float(config.load_settings()["production"]["chars_per_second"])
 
 
+
+def _short_label(t, limit=38):
+    """Trim an on-screen label at a word boundary, never leaving a dangling bracket or half a word."""
+    t = " ".join(t.split())
+    cut = t
+    if len(t) > limit:
+        cut = t[:limit]
+        if " " in cut:
+            cut = cut[:cut.rfind(" ")]
+    if cut.count("(") > cut.count(")"):
+        cut = cut[:cut.rfind("(")]
+    return cut.rstrip(" ·,:;-")
+
 def build_prompt(topic, instructions, minutes, features, channel=None, script_format="auto", concept=None):
     cps = cps_for(channel)
     total = minutes * 60
@@ -262,7 +275,7 @@ def validate(plan, minutes, cps=None):
             s["importance"] = int(s.get("importance", 1))
         except (TypeError, ValueError):
             s["importance"] = 1
-        s["on_screen_text"] = str(s.get("on_screen_text") or "")[:30]
+        s["on_screen_text"] = _short_label(str(s.get("on_screen_text") or ""))
         s["pause_after"] = s.get("pause_after") in (True, "true", "True", 1, "1")
     plan["scenes"] = scenes
     plan["title"] = str(plan.get("title") or (plan.get("titles") or ["제목 없음"])[0])[:100]

@@ -82,8 +82,10 @@ def color_clip(seconds, out, text="", color="0x101820"):
     vf = "format=yuv420p"
     if text:
         txt = Path(out).with_suffix(".txt")
+        text = _wrap2(text, 18)  # long titles go on two lines and always fit the frame
+        longest = max(text.split("\n"), key=len)
         txt.write_text(text, encoding="utf-8")
-        vf = drawtext_filter(txt, size=int(h * 0.075), y="(h-text_h)/2", box=False) + ",format=yuv420p"
+        vf = drawtext_filter(txt, size=fit_size(longest, w * 0.86, int(h * 0.075)), y="(h-text_h)/2", box=False) + ",format=yuv420p"
     run(["-f", "lavfi", "-i", f"color=c={color}:s={w}x{h}:r={fps}", "-t", f"{seconds:.3f}", "-vf", vf, *VENC, out])
     return out
 
@@ -118,6 +120,29 @@ def overlay_text(clip, text, out):
     txt = Path(out).with_suffix(".txt")
     txt.write_text(text, encoding="utf-8")
     run(["-i", clip, "-vf", drawtext_filter(txt, size=fit_size(text, w * 0.9, int(h * 0.06))), *VENC, "-an", out])
+    return out
+
+
+def chapter_intro(clip, label, title, out, seconds=2.8):
+    """Full-screen chapter title over the scene's own picture (dimmed): small gold step label + big white title,
+    fading in/out. Narration keeps playing, so the scene length does not change."""
+    w, h = _wh()
+    font = config.font_path()
+    ff = f":fontfile='{_ff_path(font)}'" if font else ""
+    T = float(seconds)
+    alpha = f"if(lt(t,0.45),t/0.45,if(lt(t,{T - 0.45}),1,max(0,({T}-t)/0.45)))"
+    tf = Path(out).with_suffix(".ct.txt")
+    lf = Path(out).with_suffix(".cl.txt")
+    tf.write_text(title, encoding="utf-8")
+    vf = (f"drawbox=x=0:y=0:w=iw:h=ih:color=black@0.62:t=fill:enable='lt(t,{T})',"
+          f"drawbox=x=iw*0.08:y=ih*0.585:w=iw*0.84:h=4:color=0xFFD54F@0.95:t=fill:enable='lt(t,{T})'")
+    if label:
+        lf.write_text(label, encoding="utf-8")
+        vf += (f",drawtext=textfile='{_ff_path(lf)}':expansion=none{ff}:fontsize={fit_size(label, w * 0.8, int(h * 0.085))}:"
+               f"fontcolor=0xFFD54F:borderw=3:bordercolor=black@0.8:x=(w-text_w)/2:y=h*0.33:alpha='{alpha}'")
+    vf += (f",drawtext=textfile='{_ff_path(tf)}':expansion=none{ff}:fontsize={fit_size(title, w * 0.84, int(h * 0.12))}:"
+           f"fontcolor=white:borderw=5:bordercolor=black@0.85:x=(w-text_w)/2:y=h*0.43:alpha='{alpha}'")
+    run(["-i", clip, "-vf", vf, *VENC, "-an", out])
     return out
 
 
@@ -187,28 +212,68 @@ def proportional_words(text, seconds):
     return out
 
 
-def build_srt(scene_words, path, max_chars=18, max_seconds=3.2):
-    """scene_words: [(scene_offset_seconds, [(start,end,word),...]), ...]"""
+def _wrap2(text, per_line=24):
+    """Balanced 1-2 line wrap at a space nearest the middle (a sentence is shown whole, never cut)."""
+    if len(text) <= per_line:
+        return text
+    words = text.split(" ")
+    if len(words) < 2:
+        return text
+    best, bd = 1, 10 ** 9
+    for k in range(1, len(words)):
+        d = abs(len(" ".join(words[:k])) - len(" ".join(words[k:])))
+        if d < bd:
+            best, bd = k, d
+    return " ".join(words[:best]) + "\n" + " ".join(words[best:])
+
+
+def build_srt(scene_words, path, max_chars=60, max_seconds=12.0):
+    """One cue = one whole sentence (two balanced lines). Only a very long sentence is split, at a comma or the
+    middle, into phrases that are each still complete phrases. scene_words: [(offset, [(start,end,word),...]), ...]"""
     cues = []
+
+    def emit(off, ws):
+        if not ws:
+            return
+        text = " ".join(w for _, _, w in ws)
+        if len(text) <= max_chars and ws[-1][1] - ws[0][0] <= max_seconds:
+            cues.append((off + ws[0][0], off + ws[-1][1], _wrap2(text)))
+            return
+        # split at the comma/connective nearest the middle, else at the middle word
+        cut, bd, tot = None, 10 ** 9, len(text)
+        run = 0
+        for k, (_, _, w) in enumerate(ws[:-1]):
+            run += len(w) + 1
+            pref = 0 if w.endswith((",", "、")) else (3 if w.endswith(("고", "며", "만", "는데", "지만", "서")) else 9)
+            d = abs(run - tot / 2) + pref * 2
+            nxt = ws[k + 1][2]
+            if re.search(r"[A-Za-z0-9]", w) and re.search(r"[A-Za-z0-9]", nxt):
+                d += 60  # never split inside a name or a number ("Redwood | Research", "3.5 | Sonnet")
+            if d < bd:
+                cut, bd = k + 1, d
+        emit(off, ws[:cut])
+        emit(off, ws[cut:])
+
     for offset, words in scene_words:
-        cur, cs, ce = [], None, None
+        sent = []
         for a, b, w in words:
-            if cs is None:
-                cs = a
-            if cur and (len(" ".join(cur + [w])) > max_chars or b - cs > max_seconds):
-                cues.append((offset + cs, offset + ce, " ".join(cur)))
-                cur, cs = [], a
-            cur.append(w)
-            ce = b
-            if w.endswith((".", "?", "!", "…")) and len(" ".join(cur)) >= 6:
-                cues.append((offset + cs, offset + ce, " ".join(cur)))
-                cur, cs = [], None
-        if cur:
-            cues.append((offset + cs, offset + ce, " ".join(cur)))
+            sent.append((a, b, w))
+            if w.endswith((".", "?", "!", "…", "。")) and len(" ".join(x[2] for x in sent)) >= 4:
+                emit(offset, sent)
+                sent = []
+        emit(offset, sent)
+    # each cue stays up until the next one starts (no flicker/gaps inside a scene's flow)
+    fixed = []
+    for k, (a, b, t) in enumerate(cues):
+        nxt = cues[k + 1][0] if k + 1 < len(cues) else None
+        end = max(b + 0.25, a + 1.2)
+        if nxt is not None:
+            end = min(end, nxt - 0.02) if nxt - 0.02 > a + 0.5 else end
+        fixed.append((a, end, t))
     with open(path, "w", encoding="utf-8") as f:
-        for i, (a, b, t) in enumerate(cues, 1):
-            f.write(f"{i}\n{_ts(a)} --> {_ts(max(b, a + 0.4))}\n{t}\n\n")
-    return path, len(cues)
+        for i, (a, b, t) in enumerate(fixed, 1):
+            f.write(f"{i}\n{_ts(a)} --> {_ts(b)}\n{t}\n\n")
+    return path, len(fixed)
 
 
 LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11"  # YouTube plays back at about -14 LUFS: every video equally loud
@@ -226,7 +291,7 @@ def final_mux(video, audio, out, srt=None, burn=True, cwd=None):
             if not target.exists():
                 shutil.copy(font, target)
         # libass scales SRT styles to a 288-pixel-high canvas, so sizes are resolution independent.
-        style = (f"FontName={config.font_name()},FontSize=18,Bold=1,PrimaryColour=&H00FFFFFF,"
+        style = (f"FontName={config.font_name()},FontSize=15,Bold=1,PrimaryColour=&H00FFFFFF,"
                  f"OutlineColour=&H00000000,BorderStyle=1,Outline=1.6,Shadow=0,MarginV=20")
         vf = f"subtitles={Path(srt).name}:fontsdir=fonts:force_style='{style}'"
         try:
@@ -277,3 +342,19 @@ def thumbnail(background, text, out, size=(1280, 720), variant=0):
         y += fs + 12
     img.save(out, "JPEG", quality=90)
     return out
+
+
+def plain_video(path):
+    """False for motion-graphics/overlay files (ProRes 4444, QuickTime RLE, alpha channel): they are not real footage,
+    often have no colour-space tag (conversion errors) and are usually unrelated to the narration."""
+    try:
+        r = subprocess.run([config.ffmpeg_bin(), "-hide_banner", "-i", str(path)], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=60)
+    except Exception:
+        return True
+    line = next((l for l in r.stderr.splitlines() if "Video:" in l), "")
+    low = line.lower()
+    if any(c in low for c in ("prores", "qtrle", "png,", "gif,", "rawvideo", "huffyuv")):
+        return False
+    return not any(f in low for f in ("yuva", "rgba", "argb", "bgra", "gbrap"))
+

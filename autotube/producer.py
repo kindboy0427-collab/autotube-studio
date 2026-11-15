@@ -18,7 +18,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from . import align, archive, budget, ccvideo, channels, config, stock2, db, footcheck, gemini, media, music, planner, stock, tts, voicecheck
+from . import http, align, archive, budget, ccvideo, channels, config, stock2, db, footcheck, gemini, media, music, planner, stock, tts, voicecheck
 
 STEPS = ["plan", "voice", "visuals", "music", "render", "thumbnail", "upload", "done"]
 PROGRESS = {"plan": 5, "voice": 20, "visuals": 40, "music": 75, "render": 80, "thumbnail": 92, "upload": 95, "done": 100}
@@ -177,6 +177,8 @@ def _topic_flags(channel, plan):
 def _visual(pid, s, i, d, folder, used, providers, credits, manual=False, out=None, space=False, flags=None):
     """Produce the raw visual for scene i with a fallback chain; returns (kind, path)."""
     kind = s["visual"]["type"]
+    if (folder / f"s{i:03d}_force_card").exists():
+        return "card", None
     prompt = s["visual"].get("prompt", "")
     q = s["visual"].get("stock_query") or prompt[:40]
     chain = list(CHAINS.get(kind, CHAINS["ai_image"]))
@@ -256,21 +258,44 @@ def explain(ex):
 
 
 def _qa_scenes(pid, scenes, work):
-    """Indices of scenes whose real/stock footage does not fit the narration (score < footage_min_score - 1)."""
-    from concurrent.futures import ThreadPoolExecutor
-    lim = float(config.load_settings()["production"].get("footage_min_score", 6)) - 1
-
-    def one(i):
-        sc = scenes[i]
-        if sc["visual"].get("type") in ("ai_image", "ai_video", "diagram"):
-            return None  # generated for this narration
-        clip = work / f"s{i:03d}_clip.mp4"
-        if not clip.exists():
-            return None
-        sco = footcheck.score(clip, sc["narration"], sc["visual"].get("prompt", ""), kind="video", production_id=pid)
-        return i if sco is not None and sco < lim else None
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        return [i for i in ex.map(one, range(len(scenes))) if i is not None]
+    """Indices of scenes whose real/stock footage does not fit the narration. One frame per scene is put on a
+    numbered contact sheet (6 scenes per sheet) and Claude Pro scores them in a single call per sheet."""
+    from PIL import Image, ImageDraw
+    import io
+    from . import subscription
+    cand = [i for i, sc in enumerate(scenes)
+            if (work / f"s{i:03d}_clip.mp4").exists() and not (work / f"s{i:03d}_aiimage.png").exists()
+            and not (work / f"s{i:03d}_force_card").exists()]
+    bad = []
+    for a in range(0, len(cand), 6):
+        group = cand[a:a + 6]
+        sheet = Image.new("RGB", (3 * 426, 2 * 240), (20, 20, 20))
+        lines = []
+        for k, i in enumerate(group):
+            fr = footcheck._frames(work / f"s{i:03d}_clip.mp4", "video")
+            if fr:
+                im = Image.open(io.BytesIO(fr[0])).convert("RGB").resize((426, 240))
+                d = ImageDraw.Draw(im)
+                d.rectangle([0, 0, 44, 34], fill=(0, 0, 0))
+                d.text((10, 8), str(k + 1), fill=(255, 255, 0))
+                sheet.paste(im, ((k % 3) * 426, (k // 3) * 240))
+            lines.append(f"{k + 1}. {scenes[i]['narration'][:160]}")
+        buf = io.BytesIO()
+        sheet.save(buf, "JPEG", quality=85)
+        prompt = ("Picture editor check for a Korean science documentary. The image is a contact sheet of up to 6 frames "
+                  "(numbers 1-6, left to right, top to bottom). Each frame is the B-roll for the narration with the same number:\n"
+                  + "\n".join(lines) + "\nScore each 0-10 as B-roll for THAT narration: 8-10 shows what is said or the same subject; "
+                  "5-7 related field/subject; 0-4 unrelated (different topic, random people/places, lecturer, text slide). "
+                  'Answer ONLY JSON like {"1": 7, "2": 3}.')
+        try:
+            res = http.parse_json_loose(subscription.run_claude_vision(prompt, [buf.getvalue()], production_id=pid))
+            for k, i in enumerate(group):
+                sc_ = res.get(str(k + 1))
+                if sc_ is not None and float(sc_) < 4:
+                    bad.append(i)
+        except Exception as ex:
+            _log(pid, f"자체 검수 일부 건너뜀: {str(ex)[:100]}")
+    return bad
 
 
 def _scene_queries(pid, scenes):
@@ -337,6 +362,9 @@ def _get_footage(k, q, d, used, p, providers, flags, sc, pid, tries=None):
 def _try_footage(fetch, tries, check, p, sc, want, k, person, pid):
     for _ in range(tries):
         _, meta = fetch()
+        if not k.endswith("photo") and Path(p).exists() and not media.plain_video(p):
+            Path(p).unlink(missing_ok=True)  # overlay/motion-graphic file, not real footage
+            continue
         if meta.pop("_prechecked", False) or not check or check(p, sc["narration"], want, "image" if k.endswith("photo") else "video", person, pid):
             return meta
         Path(p).unlink(missing_ok=True)
@@ -358,6 +386,8 @@ def _shot_list(i, sc, d, kind, raw, work, used, providers, credits, flags, ps):
     shots = [first]
     for j in range(1, n):
         p = str(work / f"s{i:03d}_extra{j}.mp4")
+        if Path(p).exists() and not media.plain_video(p):
+            Path(p).unlink(missing_ok=True)
         if Path(p).exists():
             shots.append(("video", p))
             continue
@@ -538,8 +568,9 @@ def run(pid, providers=Providers):
             except TypeError:  # test doubles without the context argument
                 _, words, engine = providers.tts(sc["narration"], str(raw), production_id=pid, voice=use,
                                                  style=tts.style_for(sc.get("emotion", ""), tone))
-            if re.search(r"\d", sc["narration"]):
-                words = []  # numbers were read out in words -> subtitles are re-timed from the original text (digits stay digits)
+            from .spoken import to_spoken_ko
+            if to_spoken_ko(sc["narration"]) != sc["narration"]:
+                words = []  # read-out differs from the written text -> subtitles keep the original spelling, re-timed
             try:
                 voicecheck.normalize(raw, mp3)  # same loudness in every scene
             except Exception:
@@ -576,6 +607,38 @@ def run(pid, providers=Providers):
                 bad = [b for b in voicecheck.outliers(pitches) if b in bad]
             if bad:
                 _log(pid, f"⚠ 장면 {', '.join(str(b + 1) for b in bad)}은 여전히 목소리가 달라 보입니다 — 완성 후 확인하세요")
+        # pronunciation guard: free Gemini transcribes every NEW scene; garbled ones are redone with another seed
+        if ps.get("voice_verify", True) and gemini.free_key_set():
+            from . import voiceverify
+            bad_scores = {}
+            for i in range(len(scenes)):
+                if (work / f"s{i:03d}_voice_ok").exists():
+                    continue
+                sco, heard = voiceverify.score(scenes[i]["narration"], str(work / f"s{i:03d}_voice.mp3"))
+                if sco is not None and sco < 0.93:
+                    bad_scores[i] = (sco, heard)
+                elif sco is not None:
+                    (work / f"s{i:03d}_voice_ok").write_text("1")
+            for attempt in range(1, 3):
+                if not bad_scores:
+                    break
+                _log(pid, f"발음·누락 의심 장면 {', '.join(str(b + 1) for b in bad_scores)} → 다시 녹음 ({attempt}차)")
+                tts.SEED_BUMP = attempt * 7
+                try:
+                    for b in list(bad_scores):
+                        words, engine = synth(b, scenes[b])
+                        save_meta(b, scenes[b], words, engine)
+                        sco, heard = voiceverify.score(scenes[b]["narration"], str(work / f"s{b:03d}_voice.mp3"))
+                        if sco is None or sco >= 0.93:
+                            bad_scores.pop(b)
+                            (work / f"s{b:03d}_voice_ok").write_text("1")
+                        else:
+                            bad_scores[b] = (sco, heard)
+                finally:
+                    tts.SEED_BUMP = 0
+            if bad_scores:
+                _log(pid, "⚠ 끝내 맞지 않은 장면(확인 필요): " + "; ".join(
+                    f"{b + 1}번 {round(v[0], 2)} 들린 말: {v[1][:40]}" for b, v in bad_scores.items()))
         for i, sc in enumerate(scenes):
             info = json.loads((work / f"s{i:03d}_voice.json").read_text(encoding="utf-8"))
             sc["_voice"] = {"duration": info["duration"], "words": info["words"]}
@@ -646,10 +709,16 @@ def run(pid, providers=Providers):
                     parts, each = [], d / len(shots)
                     for j, (sk, sp) in enumerate(shots):
                         part = work / f"s{i:03d}_shot{j}.mp4"
-                        if sk == "video":
-                            media.video_clip(sp, each, str(part))
-                        else:
-                            media.image_clip(sp, each, str(part), motion=i + j)
+                        try:
+                            if sk == "video":
+                                media.video_clip(sp, each, str(part))
+                            else:
+                                media.image_clip(sp, each, str(part), motion=i + j)
+                        except media.MediaError:
+                            if j == 0:
+                                raise
+                            Path(sp).unlink(missing_ok=True)  # unusable extra cut -> hold the previous shot instead
+                            media.image_clip(raw, each, str(part), motion=i + j) if kind in ("ai_image", "stock_photo")                                 else media.video_clip(raw, each, str(part))
                         parts.append(str(part))
                     media.concat(parts, str(tmp), str(work / f"s{i:03d}_parts.txt"))
                 elif kind in ("ai_video", "stock_video"):
@@ -658,7 +727,7 @@ def run(pid, providers=Providers):
                     media.image_clip(raw, d, str(tmp), motion=i)
                 else:
                     media.color_clip(d, str(tmp), text=sc.get("on_screen_text") or plan["title"])
-                if sc.get("on_screen_text") and kind != "card":
+                if sc.get("on_screen_text") and kind != "card" :
                     media.overlay_text(str(tmp), sc["on_screen_text"], str(tmp.with_name(tmp.stem + "_t.mp4")))
                     tmp.with_name(tmp.stem + "_t.mp4").replace(tmp)
                 if sc.get("quote") and kind != "card":
@@ -666,6 +735,16 @@ def run(pid, providers=Providers):
                     media.quote_card(str(tmp), q["text"], f"— {q['by']}" + (f", {q['when']}" if q.get("when") else ""),
                                      str(tmp.with_name(tmp.stem + "_q.mp4")))
                     tmp.with_name(tmp.stem + "_q.mp4").replace(tmp)
+                # chapter opener: big full-screen title instead of a small label (skip cold open / ending)
+                chap = sc.get("chapter") or ""
+                first_of_chapter = i == 0 or scenes[i - 1].get("chapter") != chap
+                is_chapter_card = (ps.get("chapter_cards", True) and first_of_chapter and chap and kind != "card"
+                                   and not any(k in chap for k in ("콜드", "마무리", "오프닝")) and sc["_dur"] >= 3.2)
+                if is_chapter_card:
+                    m = re.match(r"\s*(\d+\s*단계|\d+\s*부|[가-힣A-Za-z ]{1,8}?)\s*[:：]\s*(.+)", chap)
+                    label, ctitle = (m.group(1).strip(), m.group(2).strip()) if m else ("", chap)
+                    media.chapter_intro(str(tmp), label, ctitle, str(tmp.with_name(tmp.stem + "_c.mp4")))
+                    tmp.with_name(tmp.stem + "_c.mp4").replace(tmp)
                 tmp.replace(clip)
                 with lock:
                     kinds[kind] = kinds.get(kind, 0) + 1
@@ -732,19 +811,20 @@ def run(pid, providers=Providers):
             final.unlink(missing_ok=True)
             raise media.MediaError(f"렌더 길이 이상: 영상 {got:.0f}초 / 내레이션 {want:.0f}초 → 업로드 중단, [이어서 다시 시도]로 깨진 장면만 다시 만듭니다")
         _log(pid, f"렌더 완료: {round(got / 60, 1)}분 · 자막 {'영상에 입힘' if burned else '별도 파일'}")
-        # self-review: AI looks at every real-footage scene; mismatches are rebuilt once as AI visuals
-        if ps.get("self_qa", True) and not db.kv_get("qa_done:" + pid) and not manual:
+        # self-review: Claude Pro looks at every real-footage scene; mismatched ones are rebuilt once
+        if ps.get("self_qa", True) and not db.kv_get("qa_done:" + pid):
             bad = _qa_scenes(pid, scenes, work)
             db.kv_set("qa_done:" + pid, True)
             if bad:
-                _log(pid, f"자체 검수: 내레이션과 안 맞는 장면 {len(bad)}개 → AI 화면으로 다시 만듭니다 ({', '.join(str(i + 1) for i in bad)})")
+                _log(pid, f"자체 검수: 내레이션과 안 맞는 장면 {len(bad)}개 → 장면에 맞는 새 이미지가 필요해 이미지 요청 목록에 추가합니다 ({', '.join(str(i + 1) for i in bad)})")
                 row = json.loads(db.one("SELECT plan FROM productions WHERE id=?", (pid,))["plan"])
-                for i in bad:
-                    row["scenes"][i]["visual"]["type"] = "ai_video" if row["scenes"][i].get("importance", 1) >= 3 else "ai_image"
+                for i in bad:  # never a plain text card: these scenes get their own picture (ChatGPT image slot)
+                    row["scenes"][i]["visual"]["type"] = "ai_image"
                     for f in work.glob(f"s{i:03d}_*"):
                         if "voice" not in f.name:
                             f.unlink(missing_ok=True)
                 _set(pid, plan=json.dumps(row, ensure_ascii=False))
+                db.kv_set("imgready:" + pid, False)
                 for f in ("video_only.mp4", "video_list.txt"):
                     (work / f).unlink(missing_ok=True)
                 final.unlink(missing_ok=True)
