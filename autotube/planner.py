@@ -63,6 +63,9 @@ quote에 발언(확실한 것만, 지어내기 금지 — fact_check에도 적�
 [내 채널 최근 영상 — 구성·제목이 겹치지 않게]
 {recent}
 
+[내 채널 실제 시청 유지 그래프 — 장면 단위로 어디서 나갔는지 (가장 강한 신호)]
+{retention}
+
 아래 JSON으로만 답하라:
 {{
  "titles": ["제목 후보 3개 (40자 이내, 서로 다른 각도)"],
@@ -247,7 +250,40 @@ def build_prompt(topic, instructions, minutes, features, channel=None, script_fo
         features=json.dumps(features, ensure_ascii=False) if features else "(아직 학습 데이터 없음 — 일반적인 롱폼 원칙 적용)",
         playbook=json.dumps(short_pb, ensure_ascii=False)[:5000],
         examples=json.dumps(learner.relevant_examples(topic, 5, (channel or {}).get("id")), ensure_ascii=False)[:9000],
-        recent=json.dumps(_recent_titles(), ensure_ascii=False))
+        recent=json.dumps(_recent_titles(), ensure_ascii=False), retention=_retention())
+
+
+def _retention():
+    try:
+        from . import retention
+        return retention.prompt_block()
+    except Exception:
+        return "(아직 없음)"
+
+
+def normalize_scene(s, title=""):
+    """Clean one scene dict in place (also used for rewritten openings)."""
+    s["narration"] = " ".join(str(s["narration"]).split())
+    s.setdefault("visual", {})
+    if not isinstance(s["visual"], dict):
+        s["visual"] = {"prompt": str(s["visual"])}
+    s["visual"].setdefault("prompt", s["narration"][:80])
+    if s["visual"].get("source") not in ("real", "illustration", "person", "diagram"):
+        s["visual"]["source"] = "illustration"
+    s["visual"]["person"] = str(s["visual"].get("person") or "").strip()[:60]
+    if s["visual"]["source"] == "person" and not s["visual"]["person"]:
+        s["visual"]["source"] = "real"
+    q = s.get("quote")
+    s["quote"] = ({"text": str(q.get("text", ""))[:120], "by": str(q.get("by", ""))[:40], "when": str(q.get("when", ""))[:40]}
+                  if isinstance(q, dict) and q.get("text") and q.get("by") else None)
+    s["visual"].setdefault("stock_query", (title or "")[:30])
+    try:
+        s["importance"] = int(s.get("importance", 1))
+    except (TypeError, ValueError):
+        s["importance"] = 1
+    s["on_screen_text"] = _short_label(str(s.get("on_screen_text") or ""))
+    s["pause_after"] = s.get("pause_after") in (True, "true", "True", 1, "1")
+    return s
 
 
 def validate(plan, minutes, cps=None):
@@ -257,26 +293,7 @@ def validate(plan, minutes, cps=None):
     if len(scenes) < 5:
         raise PlanError("장면 수 부족")
     for s in scenes:
-        s["narration"] = " ".join(str(s["narration"]).split())
-        s.setdefault("visual", {})
-        if not isinstance(s["visual"], dict):
-            s["visual"] = {"prompt": str(s["visual"])}
-        s["visual"].setdefault("prompt", s["narration"][:80])
-        if s["visual"].get("source") not in ("real", "illustration", "person", "diagram"):
-            s["visual"]["source"] = "illustration"
-        s["visual"]["person"] = str(s["visual"].get("person") or "").strip()[:60]
-        if s["visual"]["source"] == "person" and not s["visual"]["person"]:
-            s["visual"]["source"] = "real"
-        q = s.get("quote")
-        s["quote"] = ({"text": str(q.get("text", ""))[:120], "by": str(q.get("by", ""))[:40], "when": str(q.get("when", ""))[:40]}
-                      if isinstance(q, dict) and q.get("text") and q.get("by") else None)
-        s["visual"].setdefault("stock_query", plan.get("title", "")[:30])
-        try:
-            s["importance"] = int(s.get("importance", 1))
-        except (TypeError, ValueError):
-            s["importance"] = 1
-        s["on_screen_text"] = _short_label(str(s.get("on_screen_text") or ""))
-        s["pause_after"] = s.get("pause_after") in (True, "true", "True", 1, "1")
+        normalize_scene(s, plan.get("title", ""))
     plan["scenes"] = scenes
     plan["title"] = str(plan.get("title") or (plan.get("titles") or ["제목 없음"])[0])[:100]
     plan.setdefault("titles", [plan["title"]])
@@ -343,6 +360,7 @@ def self_review(plan, channel, generate, minutes):
 
 def make_plan(topic, instructions="", minutes=None, production_id=None, generate=None, channel=None, script_format=None,
               concept=None):
+    custom = generate is not None
     generate = generate or (lambda prompt: llm.generate_json(prompt, SYSTEM, production_id))
     minutes = minutes or (channel or {}).get("target_minutes") or config.load_settings()["production"]["target_minutes"]
     features, explored = learner.choose_features()
@@ -382,9 +400,36 @@ def make_plan(topic, instructions="", minutes=None, production_id=None, generate
             pass
     if config.load_settings()["production"].get("self_review", True):
         plan = self_review(plan, channel, generate, minutes)
+    plan = polish(plan, topic, generate if custom else None, production_id, cps)
     plan["fact_check"] = [str(x)[:300] for x in (plan.get("fact_check") or [])][:30]
     plan["_features_requested"] = features
     plan["_features_explored"] = explored
     valid = set(features)
     plan["features_used"] = [f for f in plan.get("features_used", []) if f in valid] or features
+    return plan
+
+
+def polish(plan, topic, generate=None, production_id=None, cps=None):
+    """v1.10: title+thumbnail as one package, then the opening chosen from several candidates.
+    Both are best-effort: a failure keeps the plan as it was."""
+    from . import hooks, package
+    ps = config.load_settings()["production"]
+    sub = (lambda system: generate) if generate else \
+        (lambda system: (lambda prompt: llm.generate_json(prompt, system, production_id)))
+    if ps.get("package_check", True):
+        try:
+            plan = package.check(plan, topic, sub(package.SYSTEM))
+        except Exception as ex:
+            plan["package"] = {"error": str(ex)[:200]}
+    k = int(ps.get("hook_candidates", 5) or 0)
+    if k > 0:
+        try:
+            plan = hooks.improve_opening(plan, sub(hooks.SYSTEM), k, cps or cps_for(None))
+        except Exception as ex:
+            plan["hook"] = {"error": str(ex)[:200]}
+    chars = sum(len(s["narration"]) for s in plan["scenes"])
+    st = plan.get("_stats") or {}
+    rate = cps or float(config.load_settings()["production"]["chars_per_second"])
+    st.update({"scenes": len(plan["scenes"]), "chars": chars, "est_minutes": round(chars / rate / 60, 1)})
+    plan["_stats"] = st
     return plan

@@ -331,7 +331,57 @@ def get_production(pid: str):
         r[name.split(".")[0]] = f.read_text(encoding="utf-8") if f.is_file() else ""
     r["performance"] = db.rows("SELECT * FROM performance WHERE production_id=? ORDER BY id DESC LIMIT 30", (pid,))
     r["usage"] = usage.production_report(pid)
+    from . import retention, shorts
+    r["shorts"] = shorts.load(out) if r["output_dir"] else []
+    try:
+        r["retention"] = retention.for_production(pid)
+    except Exception:
+        r["retention"] = None
     return r
+
+
+def _clear_derived(output_dir):
+    """Shorts and the scene timeline belong to one render: a new render makes new ones."""
+    if output_dir:
+        shutil.rmtree(Path(output_dir, "shorts"), ignore_errors=True)
+        Path(output_dir, "timeline.json").unlink(missing_ok=True)
+
+
+class ShortAction(BaseModel):
+    n: int | None = None
+    privacy: str = Field(default="public", pattern="^(public|unlisted|private)$")
+
+
+@app.post("/api/productions/{pid}/shorts/upload")
+def shorts_upload(pid: str, body: ShortAction):
+    from . import shorts
+    r = db.one("SELECT * FROM productions WHERE id=?", (pid,))
+    if not r or not r["output_dir"] or not shorts.load(r["output_dir"]):
+        raise HTTPException(400, "쇼츠가 아직 없습니다")
+    notes = shorts.upload(pid, r["output_dir"], json.loads(r["plan"] or "{}"), r.get("youtube_id"), r.get("channel_id"), only=body.n)
+    return {"notes": notes, "shorts": shorts.load(r["output_dir"])}
+
+
+@app.post("/api/productions/{pid}/shorts/publish")
+def shorts_publish(pid: str, body: ShortAction):
+    from . import shorts
+    r = db.one("SELECT output_dir, channel_id FROM productions WHERE id=?", (pid,))
+    if not r or not r["output_dir"]:
+        raise HTTPException(404)
+    done = shorts.set_privacy(r["output_dir"], body.n, body.privacy, r.get("channel_id"))
+    if not done:
+        raise HTTPException(400, "먼저 쇼츠를 업로드하세요")
+    return {"done": done}
+
+
+@app.get("/media/{pid}/shorts/{name}")
+def short_file(pid: str, name: str):
+    if not re.fullmatch(r"short\d{1,2}\.mp4", name) or not re.fullmatch(r"[\w-]+", pid):
+        raise HTTPException(404)
+    f = (config.OUTPUT / pid / "shorts" / name).resolve()
+    if not f.is_file() or config.OUTPUT.resolve() not in f.parents:
+        raise HTTPException(404)
+    return FileResponse(f)
 
 
 @app.post("/api/productions/{pid}/retry")
@@ -349,6 +399,7 @@ def replan(pid: str):
         raise HTTPException(404)
     if r["output_dir"] and Path(r["output_dir"], "work").exists():
         shutil.rmtree(Path(r["output_dir"], "work"), ignore_errors=True)
+    _clear_derived(r["output_dir"])
     db.execute("UPDATE productions SET plan=NULL, video_path=NULL, youtube_id=NULL WHERE id=?", (pid,))
     WORKER.submit(pid)
     return {"ok": True}
@@ -367,6 +418,7 @@ def revoice(pid: str):
                 f.unlink(missing_ok=True)
     for name in ("video.mp4", "subtitles.srt"):
         Path(r["output_dir"] or "", name).unlink(missing_ok=True)
+    _clear_derived(r["output_dir"])
     # the new version must be uploaded again (the uploader skips productions that already have a youtube_id)
     db.execute("UPDATE productions SET video_path=NULL, youtube_id=NULL, privacy=NULL, status='queued', step='voice' WHERE id=?", (pid,))
     if r["youtube_id"]:
@@ -426,7 +478,12 @@ def learning():
         p["score"] = round(learner.score(p), 4)
     recent = db.rows("""SELECT v.id, v.title, v.channel_title, v.views, v.views_per_day, v.outlier_score, a.summary,
         a.perf_percentile, a.created_at FROM analyses a JOIN videos v ON v.id=a.video_id ORDER BY a.created_at DESC LIMIT 40""")
-    return {"playbook": learner.playbook(), "patterns": pats, "recent": recent}
+    from . import retention
+    try:
+        ret = retention.lessons()
+    except Exception:
+        ret = None
+    return {"playbook": learner.playbook(), "patterns": pats, "recent": recent, "retention": ret}
 
 
 @app.post("/api/learning/run")

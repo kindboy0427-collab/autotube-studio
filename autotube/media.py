@@ -304,6 +304,49 @@ def final_mux(video, audio, out, srt=None, burn=True, cwd=None):
     return out, False
 
 
+def vertical_short(video, audio, start, seconds, out, srt=None, top_text="", size=(1080, 1920), cwd=None):
+    """A piece of the finished long-form -> 9:16 Short.
+    The 16:9 picture stays whole in the middle (on-screen text, quote cards and chapter titles are not cut off),
+    a blurred, darkened copy fills the rest; a caption sits on top and the subtitles under the picture."""
+    W, H = size
+    fps = _fps()
+    cwd = cwd or str(Path(out).parent)
+    fade_out = max(0.0, seconds - 0.8)
+    vf = (f"[0:v]split[a][b];[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=24:2,"
+          f"eq=brightness=-0.18[bg];[b]scale={W}:-2[fg];[bg][fg]overlay=0:(H-h)/2,fps={fps},setsar=1")
+    if top_text:
+        tf = Path(cwd) / (Path(out).stem + "_top.txt")
+        tf.write_text(_wrap2(top_text, 12), encoding="utf-8")
+        longest = max(tf.read_text(encoding="utf-8").split("\n"), key=len)
+        vf += "," + drawtext_filter(tf, size=fit_size(longest, W * 0.88, int(H * 0.05)), y="h*0.11", box=True)
+    sub = ""
+    if srt:
+        font = config.font_path()
+        if font:
+            fonts_dir = Path(cwd) / "fonts"
+            fonts_dir.mkdir(exist_ok=True)
+            target = fonts_dir / Path(font).name
+            if not target.exists():
+                shutil.copy(font, target)
+        # 288-high libass canvas: MarginV 62 puts the lines just under the picture, above the Shorts buttons
+        style = (f"FontName={config.font_name()},FontSize=13,Bold=1,PrimaryColour=&H00FFFFFF,"
+                 f"OutlineColour=&H00000000,BorderStyle=1,Outline=1.4,Shadow=0,MarginV=62,MarginL=14,MarginR=14")
+        sub = f",subtitles={Path(srt).name}:fontsdir=fonts:force_style='{style}'"
+    af = f"afade=t=in:st=0:d=0.15,afade=t=out:st={fade_out:.2f}:d=0.8,{LOUDNORM}"
+    base = ["-ss", f"{start:.3f}", "-t", f"{seconds:.3f}", "-i", str(Path(video).resolve()),
+            "-ss", f"{start:.3f}", "-t", f"{seconds:.3f}", "-i", str(Path(audio).resolve())]
+    tail = ["-map", "[v]", "-map", "1:a", *VENC, "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart",
+            str(Path(out).resolve())]
+    if sub:
+        try:
+            run([*base, "-filter_complex", vf + sub + "[v]", "-af", af, *tail], cwd=cwd)
+            return out, True
+        except MediaError:
+            pass  # libass missing -> no burned subtitles
+    run([*base, "-filter_complex", vf + "[v]", "-af", af, *tail], cwd=cwd)
+    return out, False
+
+
 def thumbnail(background, text, out, size=(1280, 720), variant=0):
     from PIL import Image, ImageDraw, ImageFont, ImageFilter
     W, H = size

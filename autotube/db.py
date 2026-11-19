@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS channels(
 CREATE TABLE IF NOT EXISTS voices(
   id TEXT PRIMARY KEY, name TEXT NOT NULL, engine TEXT NOT NULL, ref TEXT NOT NULL,
   kind TEXT DEFAULT 'clone', note TEXT DEFAULT '', created_at TEXT);
+CREATE TABLE IF NOT EXISTS scene_retention(
+  production_id TEXT, scene INTEGER, start REAL, end REAL, r_start REAL, r_end REAL,
+  drop_per_min REAL, attrs TEXT, measured_at TEXT, PRIMARY KEY(production_id, scene));
 """
 
 MIGRATIONS = [

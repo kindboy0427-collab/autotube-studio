@@ -125,6 +125,26 @@ def analytics(video_id, published_iso, channel_id=None):
             "likes": int(likes), "comments": int(comments)}
 
 
+def retention_curve(video_id, channel_id=None, published_iso=None):
+    """Audience-retention curve of YOUR video: [(elapsed ratio 0.01..1.0, share of viewers still watching)].
+    Organic viewers only when YouTube has enough of them, else all viewers. None = not enough data yet."""
+    start = (published_iso or "2020-01-01")[:10]
+    end = dt.date.today().isoformat()
+    ya = _service("youtubeAnalytics", "v2", channel_id)
+    for flt in (f"video=={video_id};audienceType==ORGANIC", f"video=={video_id}"):
+        try:
+            res = ya.reports().query(ids="channel==MINE", startDate=start, endDate=end, filters=flt,
+                                     dimensions="elapsedVideoTimeRatio", metrics="audienceWatchRatio").execute()
+        except Exception:
+            if flt.endswith(video_id):
+                raise
+            continue
+        rows = [(float(r[0]), float(r[1])) for r in (res.get("rows") or []) if r and r[1] is not None]
+        if len(rows) >= 20:
+            return sorted(rows)
+    return None
+
+
 def video_stats(video_ids, channel_id=None):
     yt = _service(channel_id=channel_id)
     res = yt.videos().list(part="statistics,status,snippet", id=",".join(video_ids)).execute()

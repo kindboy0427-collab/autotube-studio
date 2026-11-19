@@ -60,6 +60,13 @@ class Scheduler:
                     learner.record_own_performance()
             except Exception as ex:
                 db.event("warn", "performance", f"내 영상 성과 측정 실패: {str(ex)[:200]}")
+            try:  # scene-by-scene retention: which kinds of scenes lose viewers
+                from . import retention
+                n = retention.measure_all()
+                if n:
+                    db.event("info", "retention", f"장면별 이탈 분석 갱신: 영상 {n}편")
+            except Exception as ex:
+                db.event("warn", "retention", f"장면별 이탈 분석 실패: {str(ex)[:200]}")
             db.kv_set("perf_day", day)
         # 5) weekly written playbook
         week = dt.date.today().isocalendar()[:2]

@@ -7,8 +7,9 @@ Steps (each scene asset is cached on disk, so '다시 시도' resumes where it s
  3 visuals  : AI video for the most important scenes, AI images / stock for the rest
  4 music    : ElevenLabs Music or your library, ducked under the voice
  5 render   : FFmpeg assembly 1080p, burned Korean subtitles
- 6 thumbnail: AI background + big text
- 7 upload   : private upload with 'altered/synthetic content' flag; you publish after review
+ 6 thumbnail: AI background + big text (A/B candidates use the other checked thumbnail words)
+ 7 shorts   : 2-3 vertical Shorts cut from the finished video (v1.10)
+ 8 upload   : private upload with 'altered/synthetic content' flag (+ Shorts linking to it); you publish after review
 """
 from __future__ import annotations
 import json
@@ -18,10 +19,10 @@ import threading
 import traceback
 from pathlib import Path
 
-from . import http, align, archive, budget, ccvideo, channels, config, stock2, db, footcheck, gemini, media, music, planner, stock, tts, voicecheck
+from . import http, align, archive, budget, ccvideo, channels, config, stock2, db, footcheck, gemini, media, music, planner, retention, shorts, stock, tts, voicecheck
 
-STEPS = ["plan", "voice", "visuals", "music", "render", "thumbnail", "upload", "done"]
-PROGRESS = {"plan": 5, "voice": 20, "visuals": 40, "music": 75, "render": 80, "thumbnail": 92, "upload": 95, "done": 100}
+STEPS = ["plan", "voice", "visuals", "music", "render", "thumbnail", "shorts", "upload", "done"]
+PROGRESS = {"plan": 5, "voice": 20, "visuals": 40, "music": 75, "render": 80, "thumbnail": 90, "shorts": 92, "upload": 96, "done": 100}
 
 
 class Providers:
@@ -41,6 +42,11 @@ class Providers:
     vecteezy_video = staticmethod(stock2.vecteezy_video)
     fits = staticmethod(footcheck.fits)
     music = staticmethod(music.get_track)
+
+    @staticmethod
+    def shorts_pick(prompt):
+        from . import llm
+        return llm.generate_json(prompt, shorts.SYSTEM)
 
     @staticmethod
     def upload(*a, **k):
@@ -831,6 +837,10 @@ def run(pid, providers=Providers):
                 return run(pid, providers)
             _log(pid, "자체 검수: 모든 장면 통과")
         _set(pid, video_path=str(final), srt_path=str(srt))
+        try:  # seconds of every scene -> later matched with YouTube's retention curve
+            retention.save_timeline(out, scenes)
+        except Exception as ex:
+            _log(pid, f"장면 시간표 저장 실패: {str(ex)[:100]}")
 
         # 6 thumbnail -------------------------------------------------------
         _set(pid, step="thumbnail", progress=PROGRESS["thumbnail"])
@@ -854,9 +864,11 @@ def run(pid, providers=Providers):
         ttext = plan["thumbnail"].get("text", plan["title"][:12])
         media.thumbnail(str(bg) if bg else None, ttext, str(thumb))
         alts = sorted(work.glob("s*_aiimage.png"))[:2]
+        alt_texts = [t for t in (plan["thumbnail"].get("alt_texts") or []) if t] or [ttext]
         for k, alt_bg in enumerate([bg, bg] + alts):  # candidates to pick from (YouTube Test & Compare)
-            try:
-                media.thumbnail(str(alt_bg) if alt_bg else None, ttext, str(out / f"thumbnail_alt{k + 1}.jpg"), variant=k + 1)
+            try:  # other checked thumbnail words (package check), so the A/B test compares messages, not just colours
+                media.thumbnail(str(alt_bg) if alt_bg else None, alt_texts[k % len(alt_texts)],
+                                str(out / f"thumbnail_alt{k + 1}.jpg"), variant=k + 1)
             except Exception:
                 pass
         _set(pid, thumbnail_path=str(thumb))
@@ -879,6 +891,18 @@ def run(pid, providers=Providers):
         (out / "pinned_comment.txt").write_text(plan.get("pinned_comment", ""), encoding="utf-8")
         (out / "fact_check.txt").write_text("\n".join("- " + x for x in plan.get("fact_check", [])) or "(없음)", encoding="utf-8")
 
+        # 7 shorts ----------------------------------------------------------
+        _set(pid, step="shorts", progress=PROGRESS["shorts"])
+        short_items = []
+        if int(ps.get("shorts_per_video", 3) or 0) > 0:
+            try:
+                short_items = shorts.make(pid, plan, scenes, out, work, generate=providers.shorts_pick, settings=ps,
+                                          log=lambda m: _log(pid, m))
+                if not short_items:
+                    _log(pid, "쇼츠: 조건에 맞는 구간 없음 (영상이 짧거나 렌더 파일 없음)")
+            except Exception as ex:  # a Short must never cost the long-form
+                _log(pid, f"쇼츠 만들기 실패 → 롱폼은 그대로 진행 ({explain(ex)})")
+
         # 7 upload ----------------------------------------------------------
         _set(pid, step="upload", progress=PROGRESS["upload"])
         from . import youtube_upload
@@ -890,6 +914,9 @@ def run(pid, providers=Providers):
             _set(pid, youtube_id=vid, privacy="private")
             _log(pid, f"비공개 업로드 완료: https://youtu.be/{vid} " + " ".join(notes))
             status = "uploaded_private"
+            if short_items and ps.get("shorts_auto_upload_private", True):
+                for note in shorts.upload(pid, out, plan, vid, cid, uploader=providers.upload):
+                    _log(pid, note)
         else:
             status = "ready"
             if ps.get("auto_upload_private") and not youtube_upload.connected(cid):

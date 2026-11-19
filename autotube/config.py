@@ -81,6 +81,13 @@ DEFAULTS = {
         "max_cost_per_video_usd": 15.0,
         "music": True,
         "self_review": True,             # second AI pass: editor + science fact review
+        "package_check": True,           # title + thumbnail words checked and scored as one pair (v1.10)
+        "hook_candidates": 5,            # extra openings written and blind-scored against the original (0 = off)
+        "shorts_per_video": 3,           # vertical Shorts cut from each finished video (0 = off)
+        "shorts_min_seconds": 20,
+        "shorts_max_seconds": 58,
+        "shorts_resolution": "1080x1920",
+        "shorts_auto_upload_private": True,  # upload the Shorts private together with the long-form (link to it)
         "script_format": "auto",         # auto / reversal_essay / catalog / staged_scenario / explainer
         "emphasis_pause_seconds": 1.2,   # silence after key lines (music swells under it)
         "align_subtitles": "auto",       # auto: local faster-whisper word timing if installed, else proportional

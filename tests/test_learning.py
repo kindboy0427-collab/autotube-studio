@@ -82,8 +82,11 @@ class LearningTest(TempHome):
             return {"title": "제목", "titles": ["제목"], "features_used": ["hook:question", "invented"],
                     "scenes": [{"narration": "가" * 60, "visual": "a city", "importance": "3"} for _ in range(k)]}
         plan = planner.make_plan("주제", "", minutes=5, generate=gen)
-        self.assertEqual(len(calls), 3)  # draft, too short -> expand once, then editor/fact self-review
+        # draft, too short -> expand once, editor/fact self-review, then title+thumbnail package and opening candidates
+        self.assertEqual(len(calls), 5)
         self.assertIn("편집장 겸 과학 감수자", calls[2])
+        self.assertIn("제목·썸네일 글자 조합", calls[3])
+        self.assertIn("서로 다른 방식으로", calls[4])
         self.assertEqual(len(plan["scenes"]), 40)
         self.assertEqual(plan["scenes"][0]["visual"]["prompt"], "a city")
         self.assertEqual(plan["scenes"][0]["importance"], 3)

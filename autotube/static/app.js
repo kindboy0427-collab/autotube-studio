@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const STATUS = {waiting_images:'이미지 기다리는 중', waiting_quota:'음성 한도 대기 (자동 재개)', queued:'대기', running:'제작 중', ready:'완성(미업로드)', uploaded_private:'비공개 업로드됨', published:'공개됨', failed:'실패'};
-const STEP = {plan:'대본 기획', voice:'내레이션', visuals:'영상·이미지', music:'배경음악', render:'렌더링', thumbnail:'썸네일', upload:'업로드', done:'완료'};
+const STEP = {plan:'대본 기획', voice:'내레이션', visuals:'영상·이미지', music:'배경음악', render:'렌더링', thumbnail:'썸네일', shorts:'쇼츠', upload:'업로드', done:'완료'};
 const FEAT = {hook:'도입', retention:'이탈방지', engagement:'참여유도', narration:'내레이션', visual:'화면', emotion:'감정', opens_with:'첫 감정', title:'제목', pace:'말속도', shots:'컷 길이', cta:'구독요청', format:'형식'};
 let S = {}, openId = null;
 
@@ -115,6 +115,10 @@ async function showDetail(id, quiet) {
     </div>
     ${p.status === 'waiting_images' ? '<div id="imgPanel" class="panel"></div>' : ''}
     ${(plan.titles || []).length ? `<h4>제목 후보</h4><div>${plan.titles.map(t => `<div>· ${esc(t)}</div>`).join('')}</div>` : ''}
+    ${packageBlock(plan.package)}
+    ${hookBlock(plan.hook)}
+    ${shortsBlock(id, p.shorts, !!p.youtube_id)}
+    ${retentionBlock(p.retention, plan.scenes || [])}
     ${(plan.features_used || []).length ? `<h4>반영한 학습 패턴</h4><div>${plan.features_used.map(f => `<span class="feat">${esc(featLabel(f))}</span>`).join('')}</div>` : ''}
     ${p.fact_check && p.fact_check !== '(없음)' ? `<h4>⚠ 공개 전 사실 확인할 것</h4><div class="pre">${esc(p.fact_check)}</div>` : ''}
     ${usageBlock(p.usage)}
@@ -130,6 +134,10 @@ async function showDetail(id, quiet) {
   bind('fbSend', async () => { const t = $('fbText').value.trim(); if (t) { const r = await post(`/api/channels/${p.channel_id}/feedback`, {feedback: t}); alert('채널 규칙이 갱신되었습니다:\n' + r.style_guide) } });
   bind('dRevoice', () => confirm('대본·이미지·영상은 그대로 두고 내레이션만 다시 만든 뒤 다시 렌더링할까요? (몇 십 원 수준)') && post(`/api/productions/${id}/revoice`));
   bind('dReplan', () => confirm('대본과 작업 파일을 지우고 새로 만들까요?') && post(`/api/productions/${id}/replan`));
+  bind('shUpAll', async () => { const r = await post(`/api/productions/${id}/shorts/upload`, {}); alert(r.notes.join('\n') || '올릴 쇼츠가 없습니다') });
+  bind('shPubAll', () => confirm('업로드된 쇼츠를 모두 공개할까요?') && post(`/api/productions/${id}/shorts/publish`, {privacy: 'public'}));
+  document.querySelectorAll('[data-shup]').forEach(b => b.onclick = async () => { b.disabled = true; try { const r = await post(`/api/productions/${id}/shorts/upload`, {n: +b.dataset.shup}); alert(r.notes.join('\n')) } catch (e) { alert(e.message) } showDetail(id, true) });
+  document.querySelectorAll('[data-shpub]').forEach(b => b.onclick = async () => { if (!confirm('이 쇼츠를 공개할까요?')) return; b.disabled = true; try { await post(`/api/productions/${id}/shorts/publish`, {n: +b.dataset.shpub, privacy: 'public'}) } catch (e) { alert(e.message) } showDetail(id, true) });
   if (p.status === 'waiting_images') imagePanel(id);
   if (!quiet) d.scrollIntoView({behavior: 'smooth'});
 }
@@ -197,6 +205,11 @@ async function loadLearn() {
   $('pbDo').innerHTML = block(pb.do) || '<p class="hint">아직 학습 데이터가 부족합니다. 학습 분야를 설정하고 기다리거나 영상을 직접 추가하세요.</p>';
   $('pbAvoid').innerHTML = block(pb.avoid, true) || '<p class="hint">-</p>';
   $('pbNarr').textContent = pb.narrative || '분석 영상이 10편 이상 쌓이면 매주 자동으로 작성됩니다.';
+  const R = L.retention;
+  $('pbRet').innerHTML = !R || (!R.worse.length && !R.better.length) ? `<p class="hint">공개한 영상의 시청 유지 그래프가 쌓이면 표시됩니다 (지금 ${R ? R.videos : 0}편 · 장면 ${R ? R.scenes : 0}개).</p>` :
+    `<p class="hint">공개 영상 ${R.videos}편 · 장면 ${R.scenes}개 · 평균 장면 대비 이탈률${R.intro_30s != null ? ` · 30초 유지율 ${Math.round(R.intro_30s * 100)}%` : ''}</p>
+     ${R.worse.length ? `<div><small class="hint">더 많이 나간 장면</small><br>${R.worse.map(e => `<span class="feat neg" title="${e.n}장면">${esc(e.what)} +${e.vs_avg}%</span>`).join('')}</div>` : ''}
+     ${R.better.length ? `<div><small class="hint">붙잡은 장면</small><br>${R.better.map(e => `<span class="feat" title="${e.n}장면">${esc(e.what)} ${e.vs_avg}%</span>`).join('')}</div>` : ''}`;
   $('recent').innerHTML = L.recent.map(v => `<div class="vid"><a href="https://youtu.be/${esc(v.id)}" target="_blank">${esc(v.title)}</a><br>
     <small class="hint">${esc(v.channel_title)} · 조회 ${(v.views || 0).toLocaleString()} · 성과 상위 ${v.perf_percentile != null ? Math.round((1 - v.perf_percentile) * 100) + '%' : '-'}</small><br>${esc((v.summary || '').slice(0, 160))}</div>`).join('') || '<p class="hint">아직 없음</p>';
 }
@@ -450,3 +463,41 @@ $('vRemote').onclick = async () => {
     });
   } catch (e) { $('vRemoteList').innerHTML = `<div class="msg err">${esc(e.message)}</div>` }
 };
+
+
+// ---------- v1.10: package check, opening candidates, Shorts, scene retention ----------
+function packageBlock(pk) {
+  if (!pk || !pk.chosen) return '';
+  const issues = (pk.before && pk.before.issues) || [];
+  return `<h4>제목·썸네일 짝 검사</h4>
+    <p class="hint">선택: <b>${esc(pk.chosen.title)}</b> + 썸네일 「${esc(pk.chosen.thumb)}」 · ${pk.chosen.score}점${pk.chosen.note ? ' — ' + esc(pk.chosen.note) : ''}</p>
+    ${issues.length ? `<p class="hint">처음 안의 문제: ${issues.map(esc).join(' / ')}</p>` : ''}
+    ${(pk.pairs || []).length > 1 ? `<details><summary class="hint">다른 조합 ${pk.pairs.length - 1}개</summary>${pk.pairs.slice(1).map(x => `<div class="hint">${x.score}점 · ${esc(x.title)} + 「${esc(x.thumb)}」${x.issues.length ? ' ⚠ ' + x.issues.map(esc).join(', ') : ''}</div>`).join('')}</details>` : ''}`;
+}
+
+function hookBlock(h) {
+  if (!h || !(h.candidates || []).length) return h && h.error ? `<p class="hint">도입부 후보: ${esc(h.error)}</p>` : '';
+  return `<h4>도입부 후보 ${h.candidates.length}개 채점 ${h.replaced ? '→ 더 좋은 도입부로 교체' : '→ 원래 도입부 유지'}</h4>
+    ${h.candidates.map(c => `<div class="hint">${c.chosen ? '✅' : '·'} <b>${c.score ?? '-'}점</b> [${esc(c.type === 'original' ? '원래 대본' : c.type)}] ${esc(c.first_line)}${c.why ? ' — <i>' + esc(c.why) + '</i>' : ''}</div>`).join('')}`;
+}
+
+function shortsBlock(id, list, longUp) {
+  if (!(list || []).length) return '';
+  const anyUp = list.some(x => x.youtube_id), anyLeft = list.some(x => !x.youtube_id);
+  return `<h4>쇼츠 ${list.length}개 (롱폼에서 자동 추출)</h4>
+    <div class="row">${anyLeft ? `<button id="shUpAll">쇼츠 모두 비공개 업로드</button>` : ''}${anyUp ? `<button id="shPubAll" class="primary">쇼츠 모두 공개</button>` : ''}</div>
+    ${!longUp ? '<p class="hint">롱폼을 먼저 올리면 쇼츠 설명란에 전체 영상 링크가 들어갑니다.</p>' : ''}
+    <div class="shorts">${list.map(x => `<div class="short"><video controls preload="none" src="/media/${esc(id)}/shorts/${esc(x.file)}"></video>
+      <div><b>${esc(x.title)}</b><br><small class="hint">장면 ${x.from_scene}~${x.to_scene} · ${x.seconds}초${x.why ? ' · ' + esc(x.why) : ''}</small><br>
+      ${x.youtube_id ? `<a href="https://youtu.be/${esc(x.youtube_id)}" target="_blank">youtu.be/${esc(x.youtube_id)}</a> (${esc(x.privacy || '')})
+        ${x.privacy !== 'public' ? `<button data-shpub="${x.n}">공개</button>` : ''}` : `<button data-shup="${x.n}">비공개 업로드</button>`}</div></div>`).join('')}</div>`;
+}
+
+function retentionBlock(r, scenes) {
+  if (!r || !(r.scenes || []).length) return '';
+  const worst = new Set(r.worst || []);
+  const fmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  return `<h4>장면별 이탈 (YouTube 시청 유지 그래프)</h4>
+    <p class="hint">${r.intro_30s != null ? `30초 시점 유지율 ${Math.round(r.intro_30s * 100)}% · ` : ''}빨간 장면 = 이 영상에서 가장 많이 나간 곳 (이 결과는 다음 대본에 자동 반영)</p>
+    <div class="scenes">${r.scenes.map(x => `<div style="${worst.has(x.scene) ? 'color:#ff8a80' : ''}"><small>${x.scene + 1} · ${fmt(x.start)} · 유지 ${Math.round(x.r_start * 100)}→${Math.round(x.r_end * 100)}% · 평균 대비 ${x.vs_avg > 0 ? '+' : ''}${x.vs_avg}%</small><br>${esc(((scenes[x.scene] || {}).narration || '').slice(0, 90))}</div>`).join('')}</div>`;
+}
